@@ -33,7 +33,7 @@ app.use(express.json({ limit: '5mb' }));
 license.attachDb(get, run);
 const GATE_OPEN = new Set(['/activate.html', '/api/license/status', '/api/license/trial', '/api/license/activate', '/api/health', '/favicon.ico']);
 app.use((req, res, next) => {
-  if (GATE_OPEN.has(req.path)) return next();
+  if (GATE_OPEN.has(req.path) || req.path.startsWith('/api/bot/')) return next();
   if (license.isOpen()) return next();
   if (req.path.startsWith('/api')) {
     const s = license.status();
@@ -3144,7 +3144,7 @@ app.delete('/api/used-devices/:id', auth, (req, res) => {
 const { registerBotRoutes, startUltraMsgLiveSync } = require('./whatsapp_bot');
 registerBotRoutes(app);
 
-const HOST = process.env.ARP_HOST || '127.0.0.1';
+const HOST = process.env.ARP_HOST || '0.0.0.0';
 
 function listenWithFallback(port, host) {
   return new Promise((resolve, reject) => {
