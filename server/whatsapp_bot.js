@@ -112,7 +112,7 @@ function extractSearchKeywords(rawText) {
 }
 
 // Search products by text query
-function searchProducts(rawText, limit = 6) {
+function searchProducts(rawText, limit = 3) {
   const keyword = extractSearchKeywords(rawText);
   if (!keyword || keyword.trim().length === 0) {
     return { keyword: '', products: [] };
@@ -179,42 +179,19 @@ function searchProducts(rawText, limit = 6) {
   return { keyword, products: matches };
 }
 
-// Generate friendly, well-formatted Arabic WhatsApp reply
+// Generate short, direct and friendly Arabic reply (no long old templates)
 function formatQuotationReply(products, originalQuery, greetingMsg) {
-  const storeName = get("SELECT value FROM settings WHERE key = 'store_name'")?.value || 'متجرنا';
-  
   if (!products || products.length === 0) {
-    return (
-      `أهلاً بك في *${storeName}* 👋\n\n` +
-      `عذراً، لم نتمكن من العثور على منتج يطابق استفسارك: _"${originalQuery}"_.\n\n` +
-      `💡 يمكنك كتابة اسم المنتج أو الموديل بطريقة أخرى، أو إرسال صورة وسيقوم أحد ممثلي الخدمة بالرد عليك وتأكيد السعر والتوفر فوراً! 📞`
-    );
+    return 'أهلاً بحضرتك يا فندم 🌸 للأسف المنتج ده مش متوفر حالياً في المخزون، ونوفره لحضرتك قريب إن شاء الله!';
   }
 
-  let reply = '';
-  if (greetingMsg && greetingMsg.trim()) {
-    reply += `${greetingMsg.trim()}\n\n`;
-  } else {
-    reply += `أهلاً بك في *${storeName}* 👋\nإليك تفاصيل المنتجات المتاحة والأسعار:\n\n`;
-  }
+  const top = products.slice(0, 2);
+  const items = top.map(p => {
+    const price = Number(p.sale_price || 0).toLocaleString('en-US');
+    return `• *${p.name}*: *${price} ج.م* ${p.stock > 0 ? '✅ متوفر' : '⚠️ غير متوفر'}`;
+  }).join('\n');
 
-  products.forEach((p, index) => {
-    const stockStatus = p.stock > 0 
-      ? `✅ متوفر بالمخزون (${p.stock} ${p.unit || 'قطعة'})`
-      : `⚠️ غير متوفر حالياً`;
-    const catText = p.category_name ? ` | 🏷️ ${p.category_name}` : '';
-    const formattedPrice = Number(p.sale_price || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-    reply += `${index + 1}. *${p.name}*\n`;
-    reply += `   💰 السعر: *${formattedPrice} ج.م*\n`;
-    reply += `   📦 الحالة: ${stockStatus}${catText}\n\n`;
-  });
-
-  reply += `━━━━━━━━━━━━━━━\n`;
-  reply += `💬 للطلب أو الحجز يمكنك الرد على هذه الرسالة أو زيارة الفرع.\n`;
-  reply += `📍 نسعد دائماً بخدمتكم!`;
-
-  return reply;
+  return `أهلاً بحضرتك يا فندم 🌸\n${items}\nتحت أمرك لو حابب تحجز قطعتك!`;
 }
 
 // Call Google Gemini API using native safeFetch (with multi-model quota failover)
@@ -243,7 +220,7 @@ async function callGeminiApi(systemPrompt, userPrompt, apiKey, preferredModel = 
     ],
     generationConfig: {
       temperature: 0.35,
-      maxOutputTokens: 1000
+      maxOutputTokens: 250
     }
   };
 
@@ -305,71 +282,55 @@ function detectOwnerInquiry(text) {
   return patterns.some(p => p.test(normalized));
 }
 
-// Generate friendly response for store owner inquiries
+// Generate short, direct response for store owner inquiries
 async function formatOwnerReply(originalQuery, ownerInfo, geminiKey, geminiModel, storeName) {
   const name = ownerInfo?.name || 'المعلم علي';
   const phone = ownerInfo?.phone || '01050592877';
   const schedule = ownerInfo?.schedule || 'متواجد يومياً بالمحل من 5:00 مساءً حتى 11:00 مساءً عدا الجمعة';
-  const customNote = ownerInfo?.custom_reply || 'المعلم متواجد في المحل حسب المواعيد الموضحة، ولأي استفسار عاجل يمكنك التواصل معه مباشرة عبر هاتفه الخاص.';
   const sName = storeName || 'متجرنا';
 
   if (geminiKey && String(geminiKey).trim()) {
-    const systemPrompt = `أنت بائع مصري ودود ومحترم جداً وشغال في محل "${sName}".
-الزبون بيسأل على واتساب عن صاحب المحل / المعلم.
-البيانات الحقيقية المؤكدة لصاحب المحل:
-- الاسم: ${name}
-- مواعيد تواجده في المحل: ${schedule}
-- رقم هاتفه المباشر / واتساب: ${phone}
-- تنبيه المحل: ${customNote}
-
-المطلوب:
-1. رحب بالعميل بأسلوب مصري راقي ومحترم جداً (يا فندم، منورنا، أهلاً بك).
-2. وضح له مواعيد تواجد المعلم في المحل بدقة ورقم تليفونه للتواصل معه في أي وقت.
-3. التزم تماماً بالبيانات المذكورة ولا تؤلف أي مواعيد أو أرقام من عندك.
-4. نسق الرسالة بنقاط منظمة وإيموجي لطيفة خفيفة للواتساب.`;
+    const systemPrompt = `أنت بائع في محل "${sName}".
+الزبون بيسأل عن صاحب المحل أو المعلم.
+المطلوب: رد عليه باختصار شديد ومباشر جداً (في سطرين فقط وبلهجة مصرية ودودة):
+- وضح مواعيد تواجد المعلم (${schedule}) ورقم تليفونه المباشر (${phone}).
+- ممنوع أي رغي أو كلام زيادة. سطرين ومباشر.`;
 
     const aiText = await callGeminiApi(systemPrompt, originalQuery, geminiKey, geminiModel);
     if (aiText) return { reply: aiText, is_ai: true };
   }
 
-  const fallback =
-    `أهلاً بك في *${sName}* 👋\n\n` +
-    `بخصوص استفسارك عن المعلم *${name}*:\n` +
-    `⏰ *مواعيد التواجد بالمحل:* ${schedule}\n` +
-    `📱 *رقم التواصل المباشر:* ${phone}\n\n` +
-    `💬 ${customNote}\n\n` +
-    `━━━━━━━━━━━━━━━\n` +
-    `🏪 نسعد دائماً بزيارتكم وخدمتكم في أي وقت!`;
+  const fallback = `أهلاً بحضرتك يا فندم 🌸\nالمعلم متواجد في المحل ${schedule}.\nورقمه المباشر للتواصل في أي وقت: ${phone} 📱`;
 
   return { reply: fallback, is_ai: false };
 }
 
-// Generate human-like AI-grounded quotation reply via Gemini (with 100% reliable local fallback)
+// Generate human-like AI quotation reply via Gemini (concise, natural, straight to the point)
 async function generateAIPoweredProductReply(products, originalQuery, greetingMsg, storeName, geminiKey, geminiModel) {
   const sName = storeName || 'متجرنا';
 
   if (geminiKey && String(geminiKey).trim()) {
     let inventoryContext = '';
     if (!products || products.length === 0) {
-      inventoryContext = 'لم يتم العثور على أي منتج يطابق استفسار العميل في مخزون المحل حالياً.';
+      inventoryContext = 'المنتج المطلوب غير متوفر حالياً في المخزون.';
     } else {
-      inventoryContext = products.map((p, idx) => {
-        const stockStatus = p.stock > 0 ? `متوفر (${p.stock} ${p.unit || 'قطعة'})` : 'غير متوفر حالياً بالمخزون';
-        const cat = p.category_name ? ` (قسم: ${p.category_name})` : '';
-        const price = Number(p.sale_price || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        return `${idx + 1}. ${p.name}${cat} | السعر: ${price} ج.م | الحالة: ${stockStatus}`;
+      inventoryContext = products.slice(0, 2).map((p, idx) => {
+        const stockStatus = p.stock > 0 ? `متوفر (${p.stock} قطعة)` : 'غير متوفر حالياً';
+        const price = Number(p.sale_price || 0).toLocaleString('en-US');
+        return `• ${p.name}: سعره ${price} ج.م (${stockStatus})`;
       }).join('\n');
     }
 
-    const systemPrompt = `أنت بائع مصري خبير وأمين وشاطر جداً في متجر "${sName}". ترد على استفسارات الزبائن على واتساب بأسلوب بشري طبيعي دافئ ومهذب (لهجة مصرية عامية مرحبة وأنيقة مثل: يا فندم، نورتنا، تحت أمرك، ألف شكر).
+    const systemPrompt = `أنت بائع مصري شاطر في متجر "${sName}".
+المطلوب منك: رد على استفسار الزبون على واتساب باختصار شديد ومباشر وبلهجة مصرية عامية ودودة (سطرين أو 3 أسطر فقط بالكتير).
 
-قواعد حاسمة لمنع التأليف (Grounding Rules):
-1. التزم حصرياً وبشكل صارم بالمنتجات والأسعار والمخزون المذكورة في قائمة المخزون أدناه. لا تخترع منتجات ولا أسعاراً ليست في القائمة.
-2. إذا كان المنتج غير متوفر أو لم يُعثر عليه: اعتذر بلطف ولباقة واقترح عليه يبعت صورة للمنتج وسنوفره له فوراً أو يزور المحل.
-3. إذا كان المنتج متوفراً: وضح السعر بالجنيه بوضوح وحمس العميل بلطف للحجز أو الشراء.
-4. نسق الرسالة بأسلوب جذاب وسهل القراءة على الهاتف مع إيموجي خفيفة مناسبة للواتساب.
+شروط هامة جداً:
+1. ممنوع تماماً الرغي أو المقدمات الطويلة أو تكرار التحيات أو الجداول الكبيرة.
+2. اذكر السعر بالجنيه وتوفر المنتج مباشرة كما في قائمة المخزون.
+3. التزم حصرياً بالأسعار المذكورة ولا تؤلف أي أسعار.
+4. لو غير متوفر: اعتذر بلطف في سطر واحد واقترح توفيره له.
 
-بيانات المخزون المستخرجة من نظام المحل الآن:
+المخزون المتوفر:
 ${inventoryContext}`;
 
     const aiText = await callGeminiApi(systemPrompt, originalQuery, geminiKey, geminiModel);
