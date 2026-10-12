@@ -1235,7 +1235,7 @@ function registerBotRoutes(app) {
     const greetingMsg = get("SELECT value FROM settings WHERE key = 'bot_greeting_msg'")?.value || '';
     const autoQuoteSetting = get("SELECT value FROM settings WHERE key = 'bot_auto_quote_enabled'")?.value !== '0';
     const geminiEnabled = get("SELECT value FROM settings WHERE key = 'gemini_enabled'")?.value !== '0';
-    const geminiKey = geminiEnabled ? (get("SELECT value FROM settings WHERE key = 'gemini_api_key'")?.value || '') : '';
+    const geminiKey = (geminiEnabled ? (get("SELECT value FROM settings WHERE key = 'gemini_api_key'")?.value || '') : '') || process.env.GEMINI_API_KEY || '';
     const geminiModel = get("SELECT value FROM settings WHERE key = 'gemini_model'")?.value || 'gemini-1.5-flash';
     const storeName = get("SELECT value FROM settings WHERE key = 'store_name'")?.value || 'متجرنا';
 
@@ -1352,7 +1352,7 @@ function registerBotRoutes(app) {
 
           const autoQuoteSetting = get("SELECT value FROM settings WHERE key = 'bot_auto_quote_enabled'")?.value !== '0';
           const geminiEnabled = get("SELECT value FROM settings WHERE key = 'gemini_enabled'")?.value !== '0';
-          const geminiKey = geminiEnabled ? (get("SELECT value FROM settings WHERE key = 'gemini_api_key'")?.value || '') : '';
+          const geminiKey = (geminiEnabled ? (get("SELECT value FROM settings WHERE key = 'gemini_api_key'")?.value || '') : '') || process.env.GEMINI_API_KEY || '';
           const geminiModel = get("SELECT value FROM settings WHERE key = 'gemini_model'")?.value || 'gemini-3.8-flash';
           const storeName = get("SELECT value FROM settings WHERE key = 'store_name'")?.value || 'متجرنا';
           const greetingMsg = get("SELECT value FROM settings WHERE key = 'bot_greeting_msg'")?.value || '';
