@@ -1,0 +1,7 @@
+﻿node_modules/
+release-1.5.0/
+dist/
+scratch/
+*.log
+data/backups/
+.n8n/

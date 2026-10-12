@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ARP نظام ادارة الكترونيات</title>
+  <link rel="icon" type="image/png" href="icon.png">
+  <link rel="stylesheet" href="css/style.css">
+  <script>
+    if (localStorage.getItem('theme') === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+  </script>
+</head>
+<body>
+  <div class="app">
+    <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeSidebarMobile()"></div>
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="logo">🛒</div>
+        <div>
+          <div class="name" id="storeName">ARP نظام ادارة الكترونيات</div>
+          <div class="sub">إدارة المبيعات والمخزون والصيانة</div>
+        </div>
+      </div>
+      <nav class="nav" id="navMenu"></nav>
+      <div class="sidebar-footer">
+        <div id="sideUser" class="small"></div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <div class="flex" style="gap:10px">
+          <button class="icon-btn" onclick="toggleSidebar()" title="إظهار/إخفاء القائمة الجانبية">☰</button>
+          <h1 class="page-title" id="pageTitle">الرئيسية</h1>
+        </div>
+        <div class="user-box">
+          <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="الوضع الفاتح/الداكن">🌙</button>
+          <div style="text-align:left">
+            <div class="uname" id="userName"></div>
+            <div class="urole" id="userRole"></div>
+          </div>
+          <div class="avatar" id="userAvatar">م</div>
+          <button class="btn btn-secondary btn-sm" onclick="logout()">خروج</button>
+        </div>
+      </header>
+      <div class="content">
+        <div id="viewContainer"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal" id="modalBox"></div>
+  </div>
+
+  <div id="toastContainer"></div>
+
+  <script src="js/api.js"></script>
+  <script src="lib/html5-qrcode.min.js"></script>
+  <script src="lib/bwip-js.min.js"></script>
+  <script src="js/print.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/views/dashboard.js"></script>
+  <script src="js/views/pos.js"></script>
+  <script src="js/views/sales.js"></script>
+  <script src="js/views/returns.js"></script>
+  <script src="js/views/maintenance.js"></script>
+  <script src="js/views/used_devices.js"></script>
+  <script src="js/views/products.js"></script>
+  <script src="js/views/purchases.js"></script>
+  <script src="js/views/barcodes.js"></script>
+  <script src="js/views/parties.js"></script>
+  <script src="js/views/reports.js"></script>
+<script src="js/views/accounting.js"></script>
+  <script src="js/views/expenses.js"></script>
+  <script src="js/views/coupons.js"></script>
+  <script src="js/views/stocktake.js"></script>
+  <script src="js/views/users.js"></script>
+  <script src="js/views/permissions.js"></script>
+  <script src="js/views/whatsapp_bot.js"></script>
+  <script src="js/views/settings.js"></script>
+</body>
+</html>

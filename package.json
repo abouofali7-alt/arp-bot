@@ -1,0 +1,82 @@
+{
+  "name": "arp-grocery-store",
+  "version": "1.5.0",
+  "description": "ARP نظام ادارة الكترونيات — إدارة المبيعات والمخزون والصيانة",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js",
+    "desktop": "electron .",
+    "seed": "node server/seed.js",
+    "dist": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.arp.grocery",
+    "productName": "ARP Grocery POS",
+    "directories": {
+      "output": "release-1.5.0"
+    },
+    "files": [
+      "electron/**/*",
+      "server/**/*",
+      "public/**/*",
+      "n8n_whatsapp_workflow.json",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/sql.js/dist/**"
+    ],
+    "extraResources": [
+      {
+        "from": "electron/cut.ps1",
+        "to": "cut.ps1"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "ia32"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64",
+            "ia32"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "ARP نظام ادارة الكترونيات",
+      "artifactName": "ARP-Grocery-Setup-${version}-${arch}.exe"
+    },
+    "portable": {
+      "artifactName": "ARP-Grocery-Portable-${version}-${arch}.exe"
+    }
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "bwip-js": "^4.11.2",
+    "express": "^4.21.2",
+    "html5-qrcode": "^2.3.8",
+    "jsonwebtoken": "^9.0.2",
+    "sql.js": "^1.14.1"
+  },
+  "devDependencies": {
+    "electron": "22.3.27",
+    "electron-builder": "^26.15.3",
+    "supertest": "^7.2.2"
+  },
+  "allowScripts": {
+    "electron@22.3.27": true
+  }
+}

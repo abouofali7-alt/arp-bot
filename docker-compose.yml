@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # 1. n8n Automation Engine (Runs 24/7 in the cloud)
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: arp_n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - NODE_ENV=production
+      - WEBHOOK_URL=http://YOUR_SERVER_IP:5678/
+      - GENERIC_TIMEZONE=Africa/Cairo
+      - TZ=Africa/Cairo
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+  # 2. ARP POS Bot & AI Quotation API (Runs 24/7 on the server)
+  arp-bot-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: arp_bot_api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - JWT_SECRET=arp-grocery-secret-key-2026
+    volumes:
+      - arp_db_data:/root/.local/share/arp-grocery-store/data
+
+volumes:
+  n8n_data:
+  arp_db_data:
