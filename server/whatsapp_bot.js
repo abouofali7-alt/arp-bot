@@ -217,14 +217,20 @@ function formatQuotationReply(products, originalQuery, greetingMsg) {
   return reply;
 }
 
-// Call Google Gemini API using native safeFetch (zero extra npm dependencies)
-async function callGeminiApi(systemPrompt, userPrompt, apiKey, model = 'gemini-3.8-flash') {
+// Call Google Gemini API using native safeFetch (with multi-model quota failover)
+async function callGeminiApi(systemPrompt, userPrompt, apiKey, preferredModel = 'gemini-3.5-flash') {
   if (!apiKey || !String(apiKey).trim()) return null;
-  let targetModel = (model && String(model).trim()) || 'gemini-3.8-flash';
-  if (targetModel.includes('1.5') || targetModel.includes('2.0') || targetModel.includes('2.5')) {
-    targetModel = 'gemini-3.8-flash';
-  }
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(targetModel)}:generateContent?key=${encodeURIComponent(String(apiKey).trim())}`;
+
+  const candidateModels = [];
+  const addModel = (m) => {
+    let clean = (m && String(m).trim()) || '';
+    if (clean.includes('1.5') || clean.includes('2.0') || clean.includes('2.5')) clean = 'gemini-3.5-flash';
+    if (clean && !candidateModels.includes(clean)) candidateModels.push(clean);
+  };
+  addModel(preferredModel);
+  addModel('gemini-3.5-flash');
+  addModel('gemini-flash-lite-latest');
+  addModel('gemini-3.8-flash');
 
   const payload = {
     contents: [
@@ -237,34 +243,35 @@ async function callGeminiApi(systemPrompt, userPrompt, apiKey, model = 'gemini-3
     ],
     generationConfig: {
       temperature: 0.35,
-      maxOutputTokens: 1000,
-      thinkingConfig: { thinkingBudget: 0 }
+      maxOutputTokens: 1000
     }
   };
 
-  try {
-    const res = await safeFetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      timeout: 10000
-    });
+  for (const model of candidateModels) {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(String(apiKey).trim())}`;
+    try {
+      const res = await safeFetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        timeout: 10000
+      });
 
-    if (!res.ok) {
-      console.warn(`[Gemini API] Response status ${res.status}`);
-      return null;
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (candidateText && String(candidateText).trim()) {
+          return String(candidateText).trim();
+        }
+      } else {
+        console.warn(`[Gemini API] Model ${model} returned ${res.status}, trying fallback...`);
+      }
+    } catch (err) {
+      console.warn(`[Gemini API] Model ${model} failed: ${err.message}`);
     }
-
-    const data = await res.json().catch(() => null);
-    const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (candidateText && String(candidateText).trim()) {
-      return String(candidateText).trim();
-    }
-    return null;
-  } catch (err) {
-    console.warn(`[Gemini API] Call failed: ${err.message}`);
-    return null;
   }
+
+  return null;
 }
 
 // Detect if customer message is asking about the store owner / manager / المعلم
