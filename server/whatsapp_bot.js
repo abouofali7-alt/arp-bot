@@ -445,6 +445,241 @@ function botOrUserAuth(req, res, next) {
   }
 }
 
+// ============================================================================
+// INTENT CLASSIFIER & MULTI-INTENT RESPONSE HANDLER
+// ============================================================================
+
+function classifyCustomerMessage(rawText) {
+  if (!rawText || !rawText.trim()) return { intent: 'general_chat' };
+  const text = normalizeArabicText(rawText);
+
+  const buyKeywords = [
+    'بكام', 'كام سعر', 'سعر', 'اسعار', 'عندكم', 'عندك', 'عايز اشتري', 'عاوز اشتري',
+    'احجزلي', 'احجز', 'متوفر عندك', 'موجود عندك', 'عاوز كابل', 'عايز كابل',
+    'عاوز شاحن', 'عايز شاحن', 'عاوز باور', 'عايز باور', 'عاوز جراب', 'عايز جراب',
+    'عاوز سماعه', 'عايز سماعه', 'عاوز موبايل', 'عايز موبايل'
+  ];
+  const hasBuyKeyword = buyKeywords.some(bk => text.includes(normalizeArabicText(bk)));
+
+  const ownerStoreKeywords = [
+    'صاحب المحل', 'صاحب المتجر', 'صاحب الشغل', 'صاحب المكان',
+    'موجود في المحل', 'موجود دلوقتي في المحل', 'موجود بالمحل',
+    'فين صاحب', 'رقم صاحب', 'رقم المعلم', 'نمره المعلم',
+    'مواعيد المعلم', 'ميعاد المعلم', 'مواعيد التواجد',
+    'عاوز اقابل', 'عايز اقابل', 'عاوز اكلم المعلم', 'عايز اكلم المعلم'
+  ];
+  const isOwnerStoreInquiry = ownerStoreKeywords.some(kw => text.includes(normalizeArabicText(kw))) ||
+    (/المعلم\s+(موجود|جه|فين|هيجي)/.test(text)) ||
+    (/(موجود|متواجد)\s+(دلوقتي|النهاردة|اليوم|بالمحل)/.test(text) && (text.includes('معلم') || text.includes('صاحب')));
+
+  if (isOwnerStoreInquiry) {
+    return { intent: 'owner_inquiry' };
+  }
+
+  const personalCheckinKeywords = [
+    'اخبارك', 'عامل ايه', 'ازيك', 'طمني عليك', 'طمني عنك', 'كيفك', 'شلونك',
+    'فينك', 'مش باين', 'وحشتني', 'وحشني', 'يا صحبي', 'يا صاحبي', 'يا معلم',
+    'حبيبي يا غالي', 'حبيبي يا صاحبي', 'يا علي', 'يا بوعلي', 'يا بو علي',
+    'منور يا غالي', 'تسلم يا غالي', 'تسلم ايدك'
+  ];
+  if (personalCheckinKeywords.some(pk => text.includes(normalizeArabicText(pk))) && !hasBuyKeyword) {
+    return { intent: 'personal_checkin' };
+  }
+
+  const techKeywords = [
+    'صيانه', 'تصليح', 'بتصلحوا', 'اصلح', 'بيسخن', 'مش بيشحن', 'ما بيشحنش',
+    'مش راضي يشحن', 'مش شغال', 'ما بيشتغلش', 'مش راضي يفتح', 'ما بيفتحش', 'مش بيفتح',
+    'بيهنج', 'مهنج', 'بيفصل', 'اتكسر', 'مكسور', 'باظ', 'اتحرق', 'تغيير شاشه',
+    'تغيير بطاريه', 'مشكله فنيه', 'عندي مشكله', 'مشكله في', 'عطلان', 'سوفت وير',
+    'بيطفي لوحده', 'الصوت واطي', 'المايك مش شغال', 'السماعه مش شغاله', 'الكاميرا فاصله'
+  ];
+  if (techKeywords.some(tk => text.includes(normalizeArabicText(tk))) && !hasBuyKeyword) {
+    return { intent: 'tech_support' };
+  }
+
+  const storeInfoKeywords = [
+    'عنوانكم', 'عنوان المحل', 'مكانكم', 'المحل فين', 'اللوكيشن', 'موقعكم', 'مكان المحل',
+    'بتفتحوا الساعه', 'مواعيد المحل', 'مواعيد العمل', 'شغالين النهارده', 'فاتحين دلوقتي',
+    'بتقفلوا امتى', 'المحل فاتح', 'اجي ازاي'
+  ];
+  if (storeInfoKeywords.some(sk => text.includes(normalizeArabicText(sk)))) {
+    return { intent: 'store_info' };
+  }
+
+  const metaKeywords = [
+    'مش بتميز', 'مش فاهم', 'غبي', 'بوت', 'ذكاء اصطناعي', 'انت مين', 'بتكلم مين', 'انسان ولا بوت'
+  ];
+  if (metaKeywords.some(mk => text.includes(normalizeArabicText(mk)))) {
+    return { intent: 'general_chat' };
+  }
+
+  const generalGreetings = [
+    'صباح الخير', 'مساء الخير', 'السلام عليكم', 'سلام عليكم', 'مرحبا', 'اهلا', 'أهلا', 'هاي', 'الو'
+  ];
+  if (generalGreetings.some(gk => text.includes(normalizeArabicText(gk))) && !hasBuyKeyword) {
+    return { intent: 'general_chat' };
+  }
+
+  const { keyword, products } = searchProducts(text);
+  if (hasBuyKeyword || (products.length > 0 && keyword.length > 2 && !['صباح', 'مساء', 'سلام', 'خير', 'معلم', 'اخبارك'].includes(keyword))) {
+    return { intent: 'product_inquiry', keyword, products };
+  }
+
+  return { intent: 'general_chat' };
+}
+
+async function processCustomerMessageReply(rawText, cleanPhone = '', customerName = 'عميل واتساب') {
+  const text = String(rawText || '').trim();
+  if (!text) return { ok: false, error: 'Empty message' };
+
+  let autoQuote = true;
+  let geminiEnabled = true;
+  let geminiKey = process.env.GEMINI_API_KEY || '';
+  let geminiModel = 'gemini-3.5-flash';
+  let storeName = 'ARP للالكترونيات';
+  let greetingMsg = '';
+  let ownerInfo = {
+    name: 'المعلم علي',
+    phone: '01050592877',
+    schedule: 'متواجد يومياً بالمحل من 5:00 مساءً حتى 11:00 مساءً عدا الجمعة',
+    custom_reply: 'المعلم متواجد في المحل حسب المواعيد الموضحة، ولأي استفسار عاجل يمكنك التواصل معه مباشرة عبر هاتفه الخاص.'
+  };
+
+  try {
+    autoQuote = get("SELECT value FROM settings WHERE key = 'bot_auto_quote_enabled'")?.value !== '0';
+    geminiEnabled = get("SELECT value FROM settings WHERE key = 'gemini_enabled'")?.value !== '0';
+    geminiKey = (geminiEnabled ? (get("SELECT value FROM settings WHERE key = 'gemini_api_key'")?.value || '') : '') || process.env.GEMINI_API_KEY || '';
+    geminiModel = get("SELECT value FROM settings WHERE key = 'gemini_model'")?.value || 'gemini-3.5-flash';
+    storeName = get("SELECT value FROM settings WHERE key = 'store_name'")?.value || 'ARP للالكترونيات';
+    greetingMsg = get("SELECT value FROM settings WHERE key = 'bot_greeting_msg'")?.value || '';
+    ownerInfo = {
+      name: get("SELECT value FROM settings WHERE key = 'store_owner_name'")?.value || 'المعلم علي',
+      phone: get("SELECT value FROM settings WHERE key = 'store_owner_phone'")?.value || '01050592877',
+      schedule: get("SELECT value FROM settings WHERE key = 'store_owner_schedule'")?.value || 'متواجد يومياً بالمحل من 5:00 مساءً حتى 11:00 مساءً عدا الجمعة',
+      custom_reply: get("SELECT value FROM settings WHERE key = 'store_owner_custom_reply'")?.value || ''
+    };
+  } catch {}
+
+  const classification = classifyCustomerMessage(text);
+  const intent = classification.intent;
+  let reply = '';
+  let isAiGenerated = false;
+  let matchedProductsForLog = [];
+  let detectedInterests = [];
+  let customerRecord = null;
+
+  if (intent === 'personal_checkin') {
+    detectedInterests = ['اطمئنان على المعلم'];
+    matchedProductsForLog = [{ id: 0, name: 'اطمئنان على المعلم', price: 0 }];
+    if (autoQuote) {
+      if (geminiKey) {
+        const prompt = `أنت "${ownerInfo.name}" صاحب محل "${storeName}". زبون أو صديق بيسلم عليك أو بيطمن على أحوالك على واتساب.
+المطلوب: رد عليه بود ودفء بلهجة مصرية عامية جميلة في سطر أو سطرين فقط، واسأله عن أحواله.
+ممنوع تماماً ذكر أي منتجات أو أسعار أو عروض.`;
+        const aiReply = await callGeminiApi(prompt, text, geminiKey, geminiModel);
+        if (aiReply) {
+          reply = aiReply;
+          isAiGenerated = true;
+        }
+      }
+      if (!reply) {
+        reply = `الحمد لله يا غالي كله تمام وبخير تسلم لسؤالك! 🌸\nطمني عليك وأخبارك إيه؟`;
+      }
+    }
+  } else if (intent === 'tech_support') {
+    detectedInterests = ['استفسار فني وصيانة'];
+    matchedProductsForLog = [{ id: 0, name: 'استفسار فني وصيانة', price: 0 }];
+    if (autoQuote) {
+      if (geminiKey) {
+        const prompt = `أنت فني الصيانة المعتمد في محل "${storeName}". زبون بيشتكي من مشكلة فنية أو عطل في جهازه أو شاحنه.
+المطلوب: رد عليه بلطف واطمئنان بلهجة مصرية في سطرين فقط، واقترح عليه يشرفنا في المحل أو يتواصل مع الصيانة على الرقم (${ownerInfo.phone}) لفحص الجهاز وحل المشكلة.
+ممنوع تماماً عرض أي أسعار شراء منتجات جديدة.`;
+        const aiReply = await callGeminiApi(prompt, text, geminiKey, geminiModel);
+        if (aiReply) {
+          reply = aiReply;
+          isAiGenerated = true;
+        }
+      }
+      if (!reply) {
+        reply = `ألف سلامة! بخصوص المشكلة دي شرفنا في المحل أو تواصل مع الصيانة على ${ownerInfo.phone} وهنكشفلك على الجهاز ونحلهالك فوراً إن شاء الله 🔧`;
+      }
+    }
+  } else if (intent === 'owner_inquiry') {
+    detectedInterests = ['استفسار عن صاحب المحل'];
+    matchedProductsForLog = [{ id: 0, name: 'استفسار عن صاحب المحل (المعلم)', price: 0 }];
+    if (autoQuote) {
+      const ownerRes = await formatOwnerReply(text, ownerInfo, geminiKey, geminiModel, storeName);
+      reply = ownerRes.reply;
+      isAiGenerated = ownerRes.is_ai;
+    }
+  } else if (intent === 'store_info') {
+    detectedInterests = ['مواعيد وعنوان المحل'];
+    matchedProductsForLog = [{ id: 0, name: 'مواعيد وعنوان المحل', price: 0 }];
+    if (autoQuote) {
+      if (geminiKey) {
+        const prompt = `أنت في خدمة عملاء "${storeName}". الزبون بيسأل عن عنوان المحل أو مواعيد العمل.
+المطلوب: رد عليه باختصار ودقة في سطرين فقط (المواعيد: يومياً من 10 صباحاً حتى 11 مساءً، الجمعة من 2 ظهراً، العنوان: شارع الجمهورية الرئيسي).`;
+        const aiReply = await callGeminiApi(prompt, text, geminiKey, geminiModel);
+        if (aiReply) {
+          reply = aiReply;
+          isAiGenerated = true;
+        }
+      }
+      if (!reply) {
+        reply = `أهلاً بحضرتك 🌸\nمواعيدنا يومياً من 10:00 ص حتى 11:00 م (الجمعة من 2:00 م).\nعنوان المحل: شارع الجمهورية الرئيسي، منورنا في أي وقت!`;
+      }
+    }
+  } else if (intent === 'general_chat') {
+    detectedInterests = ['محادثة عامة'];
+    matchedProductsForLog = [{ id: 0, name: 'محادثة عامة', price: 0 }];
+    if (autoQuote) {
+      if (geminiKey) {
+        const prompt = `أنت المساعد الذكي لمحل "${storeName}". الزبون بيرسل تحية أو رسالة عامة أو عتاب أو ملاحظة.
+المطلوب: رد عليه بلطف وترحاب بلهجة مصرية في سطر أو سطرين فقط، واسأله أقدر أساعدك إزاي سواء في المنتجات أو استفسار فني وصيانة. ممنوع تماماً إرسال أي أسعار أو قوائم منتجات عشوائية.`;
+        const aiReply = await callGeminiApi(prompt, text, geminiKey, geminiModel);
+        if (aiReply) {
+          reply = aiReply;
+          isAiGenerated = true;
+        }
+      }
+      if (!reply) {
+        reply = `أهلاً بحضرتك يا فندم نورتنا 🌸\nأنا معاك، قولي أقدر أساعدك إزاي سواء استفسار عن منتج أو صيانة جهاز؟`;
+      }
+    }
+  } else {
+    // Branch: product_inquiry
+    const { keyword, products } = classification.products ? classification : searchProducts(text);
+    (products || []).forEach(p => {
+      if (p.category_name && !detectedInterests.includes(p.category_name)) detectedInterests.push(p.category_name);
+      if (p.name && !detectedInterests.includes(p.name)) detectedInterests.push(p.name);
+    });
+    if (keyword && detectedInterests.length === 0) detectedInterests.push(keyword);
+    matchedProductsForLog = (products || []).map(p => ({ id: p.id, name: p.name, price: p.sale_price }));
+
+    if (autoQuote) {
+      const prodRes = await generateAIPoweredProductReply(products || [], text, greetingMsg, storeName, geminiKey, geminiModel);
+      reply = prodRes.reply;
+      isAiGenerated = prodRes.is_ai;
+    }
+  }
+
+  if (cleanPhone) {
+    customerRecord = recordCustomerInteraction(cleanPhone, customerName, detectedInterests);
+  }
+
+  return {
+    ok: true,
+    intent,
+    reply,
+    is_ai: isAiGenerated,
+    matched_count: (intent === 'product_inquiry' && classification.products) ? classification.products.length : 0,
+    matched_products: matchedProductsForLog,
+    customer_id: customerRecord?.id || null,
+    customer_name: customerRecord?.name || customerName || '',
+    interests: customerRecord?.interests || detectedInterests.join(', ')
+  };
+}
+
 /* =========================================================================
    ULTRAMSG INTEGRATION (DIRECT SEND & LIVE SYNC)
    ========================================================================= */
@@ -473,6 +708,7 @@ async function sendUltraMsgMessage(phone, body) {
 }
 
 let lastProcessedUltraMsgIds = new Set();
+let recentSentMessageTexts = new Set();
 let ultraMsgPollingTimer = null;
 let isPollingActive = false;
 
@@ -486,18 +722,37 @@ async function handleUltraMsgIncomingMessage(msg) {
     lastProcessedUltraMsgIds = new Set(arr.slice(-1200));
   }
 
-  // Do not reply to outbound messages generated by our bot or store
-  if (msg.fromMe === true && !msg.fromSelfTest) return;
+  // 1. Strict boolean or string check for outbound / fromMe messages
+  if (msg.fromMe === true || msg.fromMe === 'true' || msg.fromMe === 1) return;
+  if (msg.fromSelfTest) { /* allow */ }
 
   const text = String(msg.body || '').trim();
   if (!text) return;
 
-  // Never loop or reply to the bot's own known replies / templates
-  if (text.includes('للطلب أو الحجز يمكنك الرد') || text.includes('نسعد دائماً بزيارتكم وخدمتكم') || text.includes('أهلاً بك في متجرنا! يسعدنا مساعدتك') || text.includes('أهلاً بك في *ARP')) {
+  // 2. Anti-Loop: Check if incoming text is identical to a recent outbound reply
+  if (recentSentMessageTexts.has(text)) return;
+
+  // 3. Anti-Loop: Check signature phrases from our bot templates and AI personas
+  const botPhrases = [
+    'للطلب أو الحجز يمكنك الرد',
+    'نسعد دائماً بزيارتكم وخدمتكم',
+    'أهلاً بك في متجرنا! يسعدنا مساعدتك',
+    'أهلاً بك في *ARP',
+    'أهلاً بحضرتك يا فندم',
+    'يا هلا بيك يا غالي',
+    'تحت أمرك لو حابب تحجز',
+    'متواجد بالمحل',
+    'ج.م',
+    'ألف سلامة',
+    'نورت "ARP',
+    'طمني عليك وأخبارك إيه',
+    'أقدر أساعدك إزاي'
+  ];
+  if (botPhrases.some(phrase => text.includes(phrase))) {
     return;
   }
 
-  // Ignore groups, broadcasts, and newsletters
+  // 4. Ignore groups, broadcasts, and newsletters
   const fromStr = String(msg.from || '');
   if (fromStr.includes('@g.us') || fromStr.includes('@broadcast') || fromStr.includes('@newsletter') || msg.isGroup || fromStr.startsWith('120363')) {
     return;
@@ -507,96 +762,50 @@ async function handleUltraMsgIncomingMessage(msg) {
   const cleanPhone = sanitizePhone(rawPhone);
   const customerName = msg.pushname || msg.name || 'عميل واتساب';
 
+  // 5. Anti-Loop: NEVER reply to the bot's own connected WhatsApp instance phone
+  if (cleanPhone === '201050592877' || cleanPhone === '01050592877') {
+    return;
+  }
+
   console.log(`[UltraMsg Bot] رسالة فورية من ${cleanPhone} (${customerName}): "${text}"`);
 
   // 1. Log inbound message
   logWhatsAppMessage(cleanPhone, 'inbound', text, []);
 
-  // Settings
-  let autoQuote = true;
-  let geminiEnabled = true;
-  let geminiKey = process.env.GEMINI_API_KEY || '';
-  let geminiModel = 'gemini-3.5-flash';
-  let storeName = 'متجرنا';
-  let greetingMsg = '';
-  let ownerInfo = {
-    name: 'المعلم علي',
-    phone: '01050592877',
-    schedule: 'متواجد يومياً بالمحل من 5:00 مساءً حتى 11:00 مساءً عدا الجمعة',
-    custom_reply: 'المعلم متواجد في المحل حسب المواعيد الموضحة، ولأي استفسار عاجل يمكنك التواصل معه مباشرة عبر هاتفه الخاص.'
-  };
+  // 2. Process message using unified multi-intent handler
+  const result = await processCustomerMessageReply(text, cleanPhone, customerName);
+  const reply = result.reply;
 
-  try {
-    autoQuote = get("SELECT value FROM settings WHERE key = 'bot_auto_quote_enabled'")?.value !== '0';
-    geminiEnabled = get("SELECT value FROM settings WHERE key = 'gemini_enabled'")?.value !== '0';
-    geminiKey = (geminiEnabled ? (get("SELECT value FROM settings WHERE key = 'gemini_api_key'")?.value || '') : '') || process.env.GEMINI_API_KEY || '';
-    geminiModel = get("SELECT value FROM settings WHERE key = 'gemini_model'")?.value || 'gemini-3.5-flash';
-    storeName = get("SELECT value FROM settings WHERE key = 'store_name'")?.value || 'متجرنا';
-    greetingMsg = get("SELECT value FROM settings WHERE key = 'bot_greeting_msg'")?.value || '';
-    ownerInfo = {
-      name: get("SELECT value FROM settings WHERE key = 'store_owner_name'")?.value || 'المعلم علي',
-      phone: get("SELECT value FROM settings WHERE key = 'store_owner_phone'")?.value || '01050592877',
-      schedule: get("SELECT value FROM settings WHERE key = 'store_owner_schedule'")?.value || 'متواجد يومياً بالمحل من 5:00 مساءً حتى 11:00 مساءً عدا الجمعة',
-      custom_reply: get("SELECT value FROM settings WHERE key = 'store_owner_custom_reply'")?.value || ''
-    };
-  } catch {}
+  // 3. Send outbound reply
+  if (reply) {
+    console.log(`[UltraMsg Bot] جاري إرسال الرد التلقائي (${result.is_ai ? 'Gemini AI ✨' : 'محلي ⚡'}) [Intent: ${result.intent}] إلى ${cleanPhone}...`);
 
-  const isOwnerQuery = detectOwnerInquiry(text);
-  let reply = '';
-  let matchedProductsForLog = [];
-  let isAiGenerated = false;
-
-  if (isOwnerQuery) {
-    // Branch 1: Store Owner Inquiry
-    recordCustomerInteraction(cleanPhone, customerName, ['استفسار عن صاحب المحل']);
-    if (autoQuote) {
-      const ownerRes = await formatOwnerReply(text, ownerInfo, geminiKey, geminiModel, storeName);
-      reply = ownerRes.reply;
-      isAiGenerated = ownerRes.is_ai;
-      matchedProductsForLog = [{ id: 0, name: 'استفسار عن صاحب المحل (المعلم)', price: 0 }];
+    recentSentMessageTexts.add(reply.trim());
+    if (recentSentMessageTexts.size > 200) {
+      const arr = Array.from(recentSentMessageTexts);
+      recentSentMessageTexts = new Set(arr.slice(-100));
     }
-  } else {
-    // Branch 2: Product & Stock Quotation
-    const { keyword, products } = searchProducts(text);
-    const detectedInterests = [];
-    products.forEach(p => {
-      if (p.category_name && !detectedInterests.includes(p.category_name)) detectedInterests.push(p.category_name);
-      if (p.name && !detectedInterests.includes(p.name)) detectedInterests.push(p.name);
-    });
-    if (keyword && detectedInterests.length === 0) detectedInterests.push(keyword);
 
-    recordCustomerInteraction(cleanPhone, customerName, detectedInterests);
-
-    if (autoQuote) {
-      const prodRes = await generateAIPoweredProductReply(products, text, greetingMsg, storeName, geminiKey, geminiModel);
-      reply = prodRes.reply;
-      isAiGenerated = prodRes.is_ai;
-      matchedProductsForLog = products.map(p => ({ id: p.id, name: p.name, price: p.sale_price }));
-    }
-  }
-
-  if (autoQuote && reply) {
-    console.log(`[UltraMsg Bot] جاري إرسال الرد التلقائي (${isAiGenerated ? 'Gemini AI ✨' : 'محلي ⚡'}) إلى ${cleanPhone}...`);
     const sendRes = await sendUltraMsgMessage(cleanPhone, reply);
     if (sendRes.ok) {
       console.log(`[UltraMsg Bot] تم تسليم الرد بنجاح إلى ${cleanPhone}`);
-      logWhatsAppMessage(cleanPhone, 'outbound', reply, matchedProductsForLog);
+      logWhatsAppMessage(cleanPhone, 'outbound', reply, result.matched_products);
     } else {
       console.error(`[UltraMsg Bot] خطأ أثناء إرسال الرد:`, sendRes.error);
     }
   }
 
-  // 5. Notify local n8n workflow if listening (both production and test endpoints)
+  // 4. Notify local n8n workflow if listening
   try {
     const n8nPayload = JSON.stringify({
       event_type: 'message_received',
-      intent: isOwnerQuery ? 'owner_inquiry' : 'product_inquiry',
+      intent: result.intent,
       instanceId: '193963',
       phone: cleanPhone,
       name: customerName,
       message: text,
       reply: reply,
-      is_ai: isAiGenerated,
+      is_ai: result.is_ai,
       data: {
         id: msg.id || ('msg_' + Date.now()),
         from: msg.from || cleanPhone,
@@ -1189,116 +1398,37 @@ function registerBotRoutes(app) {
     res.json({ ok: true, keyword, count: products.length, products });
   });
 
-  // 5. Main Auto-Quotation & Inquiry Engine (Called by n8n or direct webhook)
+  // 5. Main Auto-Quotation & Inquiry Engine (Called by n8n or direct test endpoint)
   app.post('/api/bot/inquiry', botOrUserAuth, async (req, res) => {
-    const { phone, name, message } = req.body || {};
+    const { phone, name, message, query } = req.body || {};
+    const text = message || query || '';
 
-    if (!message || !message.trim()) {
+    if (!text || !text.trim()) {
       return res.status(400).json({ error: 'حقل الرسالة (message) مطلوب' });
     }
 
     const cleanPhone = sanitizePhone(phone);
-    const greetingMsg = get("SELECT value FROM settings WHERE key = 'bot_greeting_msg'")?.value || '';
-    const autoQuoteSetting = get("SELECT value FROM settings WHERE key = 'bot_auto_quote_enabled'")?.value !== '0';
-    const geminiEnabled = get("SELECT value FROM settings WHERE key = 'gemini_enabled'")?.value !== '0';
-    const geminiKey = (geminiEnabled ? (get("SELECT value FROM settings WHERE key = 'gemini_api_key'")?.value || '') : '') || process.env.GEMINI_API_KEY || '';
-    const geminiModel = get("SELECT value FROM settings WHERE key = 'gemini_model'")?.value || 'gemini-1.5-flash';
-    const storeName = get("SELECT value FROM settings WHERE key = 'store_name'")?.value || 'متجرنا';
-
-    // 1. Log inbound message
     if (cleanPhone) {
-      logWhatsAppMessage(cleanPhone, 'inbound', message, []);
+      logWhatsAppMessage(cleanPhone, 'inbound', text, []);
     }
 
-    const isOwnerQuery = detectOwnerInquiry(message);
+    const result = await processCustomerMessageReply(text, cleanPhone, name || 'عميل');
 
-    if (isOwnerQuery) {
-      // Intent: Store Owner Inquiry
-      const storeOwner = {
-        name: get("SELECT value FROM settings WHERE key = 'store_owner_name'")?.value || 'المعلم علي',
-        phone: get("SELECT value FROM settings WHERE key = 'store_owner_phone'")?.value || '01050592877',
-        schedule: get("SELECT value FROM settings WHERE key = 'store_owner_schedule'")?.value || 'متواجد يومياً بالمحل من 5:00 مساءً حتى 11:00 مساءً عدا الجمعة',
-        custom_reply: get("SELECT value FROM settings WHERE key = 'store_owner_custom_reply'")?.value || ''
-      };
-
-      let customer = null;
-      if (cleanPhone) {
-        customer = recordCustomerInteraction(cleanPhone, name, ['استفسار عن صاحب المحل']);
-      }
-
-      let reply = '';
-      let isAiGenerated = false;
-      if (autoQuoteSetting) {
-        const ownerRes = await formatOwnerReply(message, storeOwner, geminiKey, geminiModel, storeName);
-        reply = ownerRes.reply;
-        isAiGenerated = ownerRes.is_ai;
-        if (cleanPhone) {
-          logWhatsAppMessage(cleanPhone, 'outbound', reply, [{ id: 0, name: 'استفسار عن صاحب المحل (المعلم)', price: 0 }]);
-        }
-      }
-
-      return res.json({
-        ok: true,
-        intent: 'owner_inquiry',
-        phone: cleanPhone,
-        customer_id: customer?.id || null,
-        customer_name: customer?.name || name || '',
-        interests: customer?.interests || 'استفسار عن صاحب المحل',
-        matched_count: 0,
-        matched_products: [],
-        is_ai: isAiGenerated,
-        reply
-      });
-    }
-
-    // Intent: Products & Stock Quotation
-    // 2. Search products matching query
-    const { keyword, products } = searchProducts(message);
-
-    // 3. Extract interests from matched products and categories
-    const detectedInterests = [];
-    products.forEach(p => {
-      if (p.category_name && !detectedInterests.includes(p.category_name)) {
-        detectedInterests.push(p.category_name);
-      }
-      if (p.name && !detectedInterests.includes(p.name)) {
-        detectedInterests.push(p.name);
-      }
-    });
-    if (keyword && detectedInterests.length === 0) {
-      detectedInterests.push(keyword);
-    }
-
-    // 4. Update or create customer record in CRM
-    let customer = null;
-    if (cleanPhone) {
-      customer = recordCustomerInteraction(cleanPhone, name, detectedInterests);
-    }
-
-    // 5. Generate formatted auto-reply (AI grounded or template fallback)
-    let reply = '';
-    let isAiGenerated = false;
-    if (autoQuoteSetting) {
-      const prodRes = await generateAIPoweredProductReply(products, message, greetingMsg, storeName, geminiKey, geminiModel);
-      reply = prodRes.reply;
-      isAiGenerated = prodRes.is_ai;
-      // Log outbound auto-reply
-      if (cleanPhone) {
-        logWhatsAppMessage(cleanPhone, 'outbound', reply, products.map(p => ({ id: p.id, name: p.name, price: p.sale_price })));
-      }
+    if (cleanPhone && result.reply) {
+      logWhatsAppMessage(cleanPhone, 'outbound', result.reply, result.matched_products);
     }
 
     return res.json({
       ok: true,
-      intent: 'product_inquiry',
+      intent: result.intent,
       phone: cleanPhone,
-      customer_id: customer?.id || null,
-      customer_name: customer?.name || name || '',
-      interests: customer?.interests || detectedInterests.join(', '),
-      matched_count: products.length,
-      matched_products: products,
-      is_ai: isAiGenerated,
-      reply
+      customer_id: result.customer_id,
+      customer_name: result.customer_name,
+      interests: result.interests,
+      matched_count: result.matched_count,
+      matched_products: result.matched_products,
+      is_ai: result.is_ai,
+      reply: result.reply
     });
   });
 
@@ -1306,55 +1436,7 @@ function registerBotRoutes(app) {
   app.post('/api/bot/webhook/ultramsg', async (req, res) => {
     const body = req.body || {};
     if (body.event_type === 'message_received' && body.data) {
-      const msg = body.data;
-      if (msg.fromMe === false && msg.body) {
-        const rawPhone = String(msg.from || '').replace(/@.*$/, '');
-        const cleanPhone = sanitizePhone(rawPhone);
-        const name = msg.pushname || msg.name || 'عميل';
-        const text = String(msg.body).trim();
-
-        if (cleanPhone && text) {
-          logWhatsAppMessage(cleanPhone, 'inbound', text, []);
-
-          const autoQuoteSetting = get("SELECT value FROM settings WHERE key = 'bot_auto_quote_enabled'")?.value !== '0';
-          const geminiEnabled = get("SELECT value FROM settings WHERE key = 'gemini_enabled'")?.value !== '0';
-          const geminiKey = (geminiEnabled ? (get("SELECT value FROM settings WHERE key = 'gemini_api_key'")?.value || '') : '') || process.env.GEMINI_API_KEY || '';
-          const geminiModel = get("SELECT value FROM settings WHERE key = 'gemini_model'")?.value || 'gemini-3.8-flash';
-          const storeName = get("SELECT value FROM settings WHERE key = 'store_name'")?.value || 'متجرنا';
-          const greetingMsg = get("SELECT value FROM settings WHERE key = 'bot_greeting_msg'")?.value || '';
-
-          const isOwnerQuery = detectOwnerInquiry(text);
-          if (isOwnerQuery) {
-            recordCustomerInteraction(cleanPhone, name, ['استفسار عن صاحب المحل']);
-            const storeOwner = {
-              name: get("SELECT value FROM settings WHERE key = 'store_owner_name'")?.value || 'المعلم علي',
-              phone: get("SELECT value FROM settings WHERE key = 'store_owner_phone'")?.value || '01050592877',
-              schedule: get("SELECT value FROM settings WHERE key = 'store_owner_schedule'")?.value || 'متواجد يومياً بالمحل من 5:00 مساءً حتى 11:00 مساءً عدا الجمعة',
-              custom_reply: get("SELECT value FROM settings WHERE key = 'store_owner_custom_reply'")?.value || ''
-            };
-            if (autoQuoteSetting) {
-              const ownerRes = await formatOwnerReply(text, storeOwner, geminiKey, geminiModel, storeName);
-              logWhatsAppMessage(cleanPhone, 'outbound', ownerRes.reply, [{ id: 0, name: 'استفسار عن صاحب المحل (المعلم)', price: 0 }]);
-              await sendUltraMsgMessage(cleanPhone, ownerRes.reply);
-            }
-          } else {
-            const { keyword, products } = searchProducts(text);
-            const detectedInterests = [];
-            products.forEach(p => {
-              if (p.category_name && !detectedInterests.includes(p.category_name)) detectedInterests.push(p.category_name);
-              if (p.name && !detectedInterests.includes(p.name)) detectedInterests.push(p.name);
-            });
-            if (keyword && detectedInterests.length === 0) detectedInterests.push(keyword);
-            recordCustomerInteraction(cleanPhone, name, detectedInterests);
-
-            if (autoQuoteSetting) {
-              const prodRes = await generateAIPoweredProductReply(products, text, greetingMsg, storeName, geminiKey, geminiModel);
-              logWhatsAppMessage(cleanPhone, 'outbound', prodRes.reply, products.map(p => ({ id: p.id, name: p.name, price: p.sale_price })));
-              await sendUltraMsgMessage(cleanPhone, prodRes.reply);
-            }
-          }
-        }
-      }
+      await handleUltraMsgIncomingMessage(body.data);
     }
     res.json({ ok: true });
   });
@@ -1635,5 +1717,9 @@ module.exports = {
   recordCustomerInteraction,
   getN8nWorkflowTemplate,
   sendUltraMsgMessage,
-  startUltraMsgLiveSync
+  startUltraMsgLiveSync,
+  classifyCustomerMessage,
+  processCustomerMessageReply,
+  callGeminiApi
 };
+
