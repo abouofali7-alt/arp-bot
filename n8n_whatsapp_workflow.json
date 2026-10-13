@@ -21,7 +21,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// استخراج رقم الهاتف واسم العميل ونص الرسالة\nconst body = $input.first().json.body || $input.first().json;\n\nlet phone = '';\nlet name = '';\nlet message = '';\n\n// صيغة UltraMsg\nif (body.event_type === 'message_received' && body.data) {\n  phone = body.data.from;\n  name = body.data.pushname || '';\n  message = body.data.body || '';\n}\n// صيغة WhatsApp Cloud API\nelse if (body.entry && body.entry[0]?.changes && body.entry[0]?.changes[0]?.value?.messages) {\n  const msgObj = body.entry[0].changes[0].value.messages[0];\n  phone = msgObj.from;\n  name = body.entry[0].changes[0].value.contacts?.[0]?.profile?.name || '';\n  message = msgObj.text?.body || '';\n} \n// صيغة Evolution API أو Baileys\nelse if (body.data?.key?.remoteJid || body.sender || body.phone) {\n  phone = body.data?.key?.remoteJid || body.sender || body.phone;\n  name = body.data?.pushName || body.name || '';\n  message = body.data?.message?.conversation || body.message?.conversation || body.text || body.message || '';\n} \n// صيغة مباشرة\nelse {\n  phone = body.phone || body.from || '';\n  name = body.name || body.senderName || '';\n  message = body.message || body.text || body.body || '';\n}\n\nphone = String(phone).replace(/@.*$/, '').replace(/[^0-9]/g, '');\n\nreturn [{\n  json: {\n    phone,\n    name,\n    message,\n    originalPayload: body\n  }\n}];"
+        "jsCode": "// استخراج رقم الهاتف واسم العميل ونص الرسالة وفحص إن كان قد تم الرد عليه\nconst body = $input.first().json.body || $input.first().json;\n\nlet phone = '';\nlet name = '';\nlet message = '';\nlet alreadySent = body.already_sent === true || body.already_sent === 'true';\n\n// صيغة UltraMsg\nif (body.event_type === 'message_received' && body.data) {\n  phone = body.data.from;\n  name = body.data.pushname || '';\n  message = body.data.body || '';\n}\n// صيغة WhatsApp Cloud API\nelse if (body.entry && body.entry[0]?.changes && body.entry[0]?.changes[0]?.value?.messages) {\n  const msgObj = body.entry[0].changes[0].value.messages[0];\n  phone = msgObj.from;\n  name = body.entry[0].changes[0].value.contacts?.[0]?.profile?.name || '';\n  message = msgObj.text?.body || '';\n} \n// صيغة Evolution API أو Baileys\nelse if (body.data?.key?.remoteJid || body.sender || body.phone) {\n  phone = body.data?.key?.remoteJid || body.sender || body.phone;\n  name = body.data?.pushName || body.name || '';\n  message = body.data?.message?.conversation || body.message?.conversation || body.text || body.message || '';\n} \n// صيغة مباشرة\nelse {\n  phone = body.phone || body.from || '';\n  name = body.name || body.senderName || '';\n  message = body.message || body.text || body.body || '';\n}\n\nphone = String(phone).replace(/@.*$/, '').replace(/[^0-9]/g, '');\n\nreturn [{\n  json: {\n    phone,\n    name,\n    message,\n    already_sent: alreadySent,\n    originalPayload: body\n  }\n}];"
       },
       "id": "normalize-incoming",
       "name": "Code: تنسيق وتجهيز البيانات",
@@ -29,6 +29,38 @@
       "typeVersion": 2,
       "position": [
         400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-already-sent",
+              "leftValue": "={{ $json.already_sent }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-already-sent",
+      "name": "If: هل تم إرسال الرد بالفعل من البوت؟",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        620,
         300
       ]
     },
@@ -69,44 +101,12 @@
         "options": {}
       },
       "id": "call-pos-api",
-      "name": "HTTP: معالجة الاستفسار والذكاء الاصطناعي",
+      "name": "HTTP: معالجة الاستفسار حسب السؤال فقط",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        620,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict"
-          },
-          "conditions": [
-            {
-              "id": "cond-owner",
-              "leftValue": "={{ $json.intent }}",
-              "rightValue": "owner_inquiry",
-              "operator": {
-                "type": "string",
-                "operation": "equals"
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      },
-      "id": "check-intent",
-      "name": "If: هل الاستفسار عن صاحب المحل؟",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [
-        840,
-        300
+        860,
+        420
       ]
     },
     {
@@ -141,54 +141,28 @@
         },
         "options": {}
       },
-      "id": "send-owner-reply",
-      "name": "HTTP: إرسال بيانات ومواعيد المعلم (UltraMsg)",
+      "id": "send-unified-reply",
+      "name": "HTTP: إرسال الرد للعميل على حسب السؤال فقط (UltraMsg)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1080,
-        200
+        1100,
+        420
       ]
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "https://api.ultramsg.com/instance193963/messages/chat",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "token",
-              "value": "366qvfkvtoodqzpi"
-            },
-            {
-              "name": "to",
-              "value": "={{ $json.phone }}"
-            },
-            {
-              "name": "body",
-              "value": "={{ $json.reply }}"
-            }
-          ]
-        },
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, message: 'تم استلام الرسالة وتسجيلها في النظام بدون تكرار إرسال', already_sent: true } }}",
         "options": {}
       },
-      "id": "send-product-reply",
-      "name": "HTTP: إرسال عرض السعر الذكي للعميل (UltraMsg)",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
+      "id": "respond-logged-only",
+      "name": "Respond to Webhook: تم التسجيل بدون تكرار",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
       "position": [
-        1080,
-        400
+        860,
+        180
       ]
     },
     {
@@ -202,8 +176,8 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [
-        1320,
-        300
+        1340,
+        420
       ]
     },
     {
@@ -219,7 +193,7 @@
       "typeVersion": 2,
       "position": [
         180,
-        560
+        600
       ]
     },
     {
@@ -232,7 +206,7 @@
       "typeVersion": 2,
       "position": [
         420,
-        560
+        600
       ]
     },
     {
@@ -273,7 +247,58 @@
       "typeVersion": 4.2,
       "position": [
         680,
-        560
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                0
+              ],
+              "triggerAtHour": 12
+            }
+          ]
+        }
+      },
+      "id": "weekly-schedule-trigger",
+      "name": "Schedule: إرسال العروض الأسبوعية المخصصة كل أحد",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        180,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:3000/api/bot/campaigns/send-weekly",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Bot-Key",
+              "value": "arp_bot_secret_key"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "run-weekly-campaign",
+      "name": "HTTP: تشغيل العروض الأسبوعية المخصصة حسب الاهتمامات",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        420,
+        800
       ]
     }
   ],
@@ -293,54 +318,43 @@
       "main": [
         [
           {
-            "node": "HTTP: معالجة الاستفسار والذكاء الاصطناعي",
+            "node": "If: هل تم إرسال الرد بالفعل من البوت؟",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "HTTP: معالجة الاستفسار والذكاء الاصطناعي": {
+    "If: هل تم إرسال الرد بالفعل من البوت؟": {
       "main": [
         [
           {
-            "node": "If: هل الاستفسار عن صاحب المحل؟",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "If: هل الاستفسار عن صاحب المحل؟": {
-      "main": [
-        [
-          {
-            "node": "HTTP: إرسال بيانات ومواعيد المعلم (UltraMsg)",
+            "node": "Respond to Webhook: تم التسجيل بدون تكرار",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "HTTP: إرسال عرض السعر الذكي للعميل (UltraMsg)",
+            "node": "HTTP: معالجة الاستفسار حسب السؤال فقط",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "HTTP: إرسال بيانات ومواعيد المعلم (UltraMsg)": {
+    "HTTP: معالجة الاستفسار حسب السؤال فقط": {
       "main": [
         [
           {
-            "node": "Respond to Webhook: إرجاع الرد",
+            "node": "HTTP: إرسال الرد للعميل على حسب السؤال فقط (UltraMsg)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "HTTP: إرسال عرض السعر الذكي للعميل (UltraMsg)": {
+    "HTTP: إرسال الرد للعميل على حسب السؤال فقط (UltraMsg)": {
       "main": [
         [
           {
@@ -367,6 +381,17 @@
         [
           {
             "node": "HTTP: إرسال رسائل العرض عبر واتساب (UltraMsg)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule: إرسال العروض الأسبوعية المخصصة كل أحد": {
+      "main": [
+        [
+          {
+            "node": "HTTP: تشغيل العروض الأسبوعية المخصصة حسب الاهتمامات",
             "type": "main",
             "index": 0
           }

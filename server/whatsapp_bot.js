@@ -359,8 +359,8 @@ function formatUltraMsgPhone(phone) {
   return p;
 }
 
-// Update or create customer profile and interest tags
-function recordCustomerInteraction(phone, name, detectedInterests) {
+// Update or create customer profile, primary category, and accumulated interest tags
+function recordCustomerInteraction(phone, name, detectedInterests, primaryCategory = '', inquiryText = '') {
   const cleanPhone = sanitizePhone(phone);
   if (!cleanPhone) return null;
 
@@ -369,19 +369,25 @@ function recordCustomerInteraction(phone, name, detectedInterests) {
     ? detectedInterests.filter(Boolean) 
     : String(detectedInterests || '').split(',').map(s => s.trim()).filter(Boolean);
 
+  const bestPrimary = primaryCategory || (newInterestsList[0] || '');
+
   if (existing) {
     let existingInterests = (existing.interests || '').split(',').map(s => s.trim()).filter(Boolean);
     const mergedInterests = Array.from(new Set([...existingInterests, ...newInterestsList]));
     const updatedName = (name && name.trim()) ? name.trim() : existing.name;
+    const finalPrimary = bestPrimary || existing.primary_interest || (mergedInterests[0] || '');
+    const finalInquiry = inquiryText || existing.last_inquiry_text || '';
 
     run(`
       UPDATE whatsapp_customers
       SET name = ?,
           interests = ?,
+          primary_interest = ?,
+          last_inquiry_text = ?,
           inquiries_count = inquiries_count + 1,
           last_inquiry_at = datetime('now','localtime')
       WHERE id = ?
-    `, [updatedName, mergedInterests.join(', '), existing.id]);
+    `, [updatedName, mergedInterests.join(', '), finalPrimary, finalInquiry, existing.id]);
 
     return get('SELECT * FROM whatsapp_customers WHERE id = ?', [existing.id]);
   } else {
@@ -389,9 +395,9 @@ function recordCustomerInteraction(phone, name, detectedInterests) {
     const initialInterests = Array.from(new Set(newInterestsList)).join(', ');
 
     const r = run(`
-      INSERT INTO whatsapp_customers (phone, name, interests, inquiries_count, last_inquiry_at)
-      VALUES (?, ?, ?, 1, datetime('now','localtime'))
-    `, [cleanPhone, initialName, initialInterests]);
+      INSERT INTO whatsapp_customers (phone, name, interests, primary_interest, last_inquiry_text, inquiries_count, last_inquiry_at)
+      VALUES (?, ?, ?, ?, ?, 1, datetime('now','localtime'))
+    `, [cleanPhone, initialName, initialInterests, bestPrimary, inquiryText || '']);
 
     return get('SELECT * FROM whatsapp_customers WHERE id = ?', [r.lastInsertRowid]);
   }
@@ -664,7 +670,13 @@ async function processCustomerMessageReply(rawText, cleanPhone = '', customerNam
   }
 
   if (cleanPhone) {
-    customerRecord = recordCustomerInteraction(cleanPhone, customerName, detectedInterests);
+    let primaryCat = '';
+    if (intent === 'product_inquiry' && classification.products?.length > 0) {
+      primaryCat = classification.products[0].category_name || classification.products[0].name;
+    } else if (intent === 'tech_support') {
+      primaryCat = 'صيانة ودعم فني';
+    }
+    customerRecord = recordCustomerInteraction(cleanPhone, customerName, detectedInterests, primaryCat, text);
   }
 
   return {
@@ -676,7 +688,8 @@ async function processCustomerMessageReply(rawText, cleanPhone = '', customerNam
     matched_products: matchedProductsForLog,
     customer_id: customerRecord?.id || null,
     customer_name: customerRecord?.name || customerName || '',
-    interests: customerRecord?.interests || detectedInterests.join(', ')
+    interests: customerRecord?.interests || detectedInterests.join(', '),
+    primary_interest: customerRecord?.primary_interest || primaryCat || ''
   };
 }
 
@@ -705,6 +718,210 @@ async function sendUltraMsgMessage(phone, body) {
   } catch (err) {
     return { ok: false, error: err.message };
   }
+}
+
+// ============================================================================
+// DYNAMIC PERSONALIZED WEEKLY OFFERS ENGINE
+// ============================================================================
+
+async function generatePersonalizedOffer(customer, storeName = 'ARP للالكترونيات', geminiKey = '', geminiModel = 'gemini-3.5-flash') {
+  const name = customer.name || 'عميلنا العزيز';
+  const interests = customer.interests || customer.primary_interest || '';
+  
+  // 1. Determine target product matching customer's specific interests
+  let targetProduct = null;
+  const interestTokens = interests.split(',').map(s => s.trim()).filter(Boolean);
+
+  for (const token of interestTokens) {
+    if (['اطمئنان على المعلم', 'محادثة عامة', 'مواعيد وعنوان المحل', 'استفسار عن صاحب المحل'].includes(token)) {
+      continue;
+    }
+    const phrase = `%${token}%`;
+    const prod = get(`
+      SELECT p.id, p.name, p.sale_price, p.stock, c.name as category_name
+      FROM products p
+      LEFT JOIN categories c ON p.category_id = c.id
+      WHERE p.active = 1 AND p.stock > 0
+        AND (p.name LIKE ? OR c.name LIKE ?)
+      ORDER BY p.stock DESC
+      LIMIT 1
+    `, [phrase, phrase]);
+
+    if (prod) {
+      targetProduct = prod;
+      break;
+    }
+  }
+
+  // Fallback: If no specific product matched, pick top available product
+  if (!targetProduct) {
+    targetProduct = get(`
+      SELECT p.id, p.name, p.sale_price, p.stock, c.name as category_name
+      FROM products p
+      LEFT JOIN categories c ON p.category_id = c.id
+      WHERE p.active = 1 AND p.stock > 0
+      ORDER BY p.stock DESC, p.id DESC
+      LIMIT 1
+    `);
+  }
+
+  const isMaintenanceInterest = interests.includes('صيانة') || interests.includes('تصليح');
+  let offerMessage = '';
+
+  if (isMaintenanceInterest && !targetProduct) {
+    offerMessage = `مساء الخير يا ${name} 🌸\nبمناسبة عروض الأسبوع في ${storeName}، بنقدملك فحص شامل لجهازك مع خصم 15% على الصيانة وقطع الغيار المعتمدة! 🔧\nشرفنا في المحل أو تواصل معنا هنا للحجز.`;
+  } else if (targetProduct) {
+    const price = Number(targetProduct.sale_price || 0).toLocaleString('en-US');
+    const mainInterest = customer.primary_interest || interestTokens[0] || 'المنتجات المميزة';
+
+    if (geminiKey) {
+      const prompt = `أنت مسؤول التسويق في محل "${storeName}". 
+اكتب رسالة عرض أسبوعي مخصصة للعميل "${name}" على واتساب.
+العميل مهتم بـ: "${mainInterest}".
+المنتج المعروض له: "${targetProduct.name}" بسعر ${price} ج.م.
+المطلوب: رسالة ودودة ومختصرة جداً في سطرين أو 3 فقط بلهجة مصرية عامية جذابة. اذكر اسم العميل والعرض الخاص وسعره، وادعوه للطلب أو الحجز. ممنوع الرغي.`;
+      const aiText = await callGeminiApi(prompt, 'اكتب العرض الأسبوعي', geminiKey, geminiModel);
+      if (aiText) offerMessage = aiText;
+    }
+
+    if (!offerMessage) {
+      offerMessage = `مساء الخير يا ${name} 🌸\nعشانك مهتم بـ ${mainInterest}، عملنالك في ${storeName} عرض الأسبوع الخاص:\n• *${targetProduct.name}*: بـ *${price} ج.م* فقط! 🔥\nلو حابب تحجز قطعتك ابعتلنا هنا فوراً ونجهزهالك!`;
+    }
+  } else {
+    offerMessage = `مساء الخير يا ${name} 🌸\nمنورنا دائماً في ${storeName}! يسعدنا إخبارك ببدء عروض الأسبوع الخاصة على تشكيلة مميزة من الأجهزة والاكسسوارات بأسعار مخفضة. تواصل معنا لمعرفة العروض المتاحة! 🎁`;
+  }
+
+  return {
+    customer_id: customer.id,
+    phone: customer.phone,
+    name,
+    interest: customer.primary_interest || interests || 'عام',
+    product: targetProduct,
+    message: offerMessage
+  };
+}
+
+async function previewWeeklyPersonalizedOffers() {
+  const customers = all(`
+    SELECT * FROM whatsapp_customers
+    WHERE phone != ''
+    ORDER BY last_inquiry_at DESC
+    LIMIT 50
+  `);
+
+  let storeName = 'ARP للالكترونيات';
+  let geminiKey = process.env.GEMINI_API_KEY || '';
+  let geminiModel = 'gemini-3.5-flash';
+  try {
+    storeName = get("SELECT value FROM settings WHERE key = 'store_name'")?.value || 'ARP للالكترونيات';
+    geminiKey = (get("SELECT value FROM settings WHERE key = 'gemini_enabled'")?.value !== '0' ? (get("SELECT value FROM settings WHERE key = 'gemini_api_key'")?.value || '') : '') || process.env.GEMINI_API_KEY || '';
+    geminiModel = get("SELECT value FROM settings WHERE key = 'gemini_model'")?.value || 'gemini-3.5-flash';
+  } catch {}
+
+  const previews = [];
+  for (const cust of customers) {
+    const offer = await generatePersonalizedOffer(cust, storeName, geminiKey, geminiModel);
+    const lastSent = cust.last_offer_sent_at;
+    const isEligibleNow = !lastSent || (new Date() - new Date(lastSent) > 7 * 24 * 60 * 60 * 1000);
+    previews.push({
+      customer_id: cust.id,
+      phone: cust.phone,
+      name: cust.name || 'عميل',
+      primary_interest: cust.primary_interest || cust.interests || 'عام',
+      inquiries_count: cust.inquiries_count,
+      last_inquiry_at: cust.last_inquiry_at,
+      last_offer_sent_at: cust.last_offer_sent_at,
+      is_eligible_now: isEligibleNow,
+      product_name: offer.product?.name || 'عرض صيانة أو تشكيلة مميزة',
+      sale_price: offer.product?.sale_price || 0,
+      preview_message: offer.message
+    });
+  }
+
+  return { ok: true, count: previews.length, previews };
+}
+
+async function sendWeeklyPersonalizedOffers() {
+  const eligibleCustomers = all(`
+    SELECT * FROM whatsapp_customers
+    WHERE phone != ''
+      AND (last_offer_sent_at IS NULL OR last_offer_sent_at < datetime('now','-7 days','localtime'))
+    ORDER BY last_inquiry_at DESC
+    LIMIT 100
+  `);
+
+  if (!eligibleCustomers || eligibleCustomers.length === 0) {
+    return { ok: true, sent_count: 0, message: 'لا يوجد عملاء مؤهلين حالياً (تم إرسال العروض لهم خلال آخر 7 أيام بالفعل).' };
+  }
+
+  let storeName = 'ARP للالكترونيات';
+  let geminiKey = process.env.GEMINI_API_KEY || '';
+  let geminiModel = 'gemini-3.5-flash';
+  try {
+    storeName = get("SELECT value FROM settings WHERE key = 'store_name'")?.value || 'ARP للالكترونيات';
+    geminiKey = (get("SELECT value FROM settings WHERE key = 'gemini_enabled'")?.value !== '0' ? (get("SELECT value FROM settings WHERE key = 'gemini_api_key'")?.value || '') : '') || process.env.GEMINI_API_KEY || '';
+    geminiModel = get("SELECT value FROM settings WHERE key = 'gemini_model'")?.value || 'gemini-3.5-flash';
+  } catch {}
+
+  const results = [];
+  let sentCount = 0;
+
+  for (const cust of eligibleCustomers) {
+    try {
+      const offer = await generatePersonalizedOffer(cust, storeName, geminiKey, geminiModel);
+      if (offer && offer.message) {
+        if (sentCount > 0) {
+          await new Promise(r => setTimeout(r, 3000));
+        }
+
+        const sendRes = await sendUltraMsgMessage(cust.phone, offer.message);
+        if (sendRes.ok) {
+          sentCount++;
+          run("UPDATE whatsapp_customers SET last_offer_sent_at = datetime('now','localtime') WHERE id = ?", [cust.id]);
+          logWhatsAppMessage(cust.phone, 'outbound', offer.message, offer.product ? [{ id: offer.product.id, name: offer.product.name, price: offer.product.sale_price }] : []);
+          results.push({ phone: cust.phone, name: cust.name, ok: true });
+        } else {
+          results.push({ phone: cust.phone, name: cust.name, ok: false, error: sendRes.error });
+        }
+      }
+    } catch (err) {
+      results.push({ phone: cust.phone, name: cust.name, ok: false, error: err.message });
+    }
+  }
+
+  if (sentCount > 0) {
+    run(`
+      INSERT INTO whatsapp_campaigns (title, message, target_interest, recipient_count, status, sent_at)
+      VALUES (?, ?, ?, ?, 'sent', datetime('now','localtime'))
+    `, ['عروض الأسبوع المخصصة حسب الاهتمامات', 'تم إرسال عروض مخصصة فردية لكل عميل بناءً على طلباته واهتماماته السابقة.', 'personalized', sentCount]);
+  }
+
+  return {
+    ok: true,
+    sent_count: sentCount,
+    total_eligible: eligibleCustomers.length,
+    results
+  };
+}
+
+let weeklyCampaignInterval = null;
+function startWeeklyCampaignScheduler() {
+  if (weeklyCampaignInterval) clearInterval(weeklyCampaignInterval);
+  weeklyCampaignInterval = setInterval(async () => {
+    try {
+      const enabled = get("SELECT value FROM settings WHERE key = 'bot_weekly_campaign_enabled'")?.value !== '0';
+      if (!enabled) return;
+
+      const now = new Date();
+      // Sunday at 12:00 PM
+      if (now.getDay() === 0 && now.getHours() === 12) {
+        console.log('[UltraMsg Bot] 🚀 بدء تشغيل جدول العروض الأسبوعية المخصصة تلقائياً...');
+        await sendWeeklyPersonalizedOffers();
+      }
+    } catch (e) {
+      console.warn('[UltraMsg Bot] Weekly scheduler check error:', e.message);
+    }
+  }, 1000 * 60 * 60);
 }
 
 let lastProcessedUltraMsgIds = new Set();
@@ -799,6 +1016,7 @@ async function handleUltraMsgIncomingMessage(msg) {
   try {
     const n8nPayload = JSON.stringify({
       event_type: 'message_received',
+      already_sent: true,
       intent: result.intent,
       instanceId: '193963',
       phone: cleanPhone,
@@ -989,12 +1207,13 @@ function getN8nWorkflowTemplate(baseUrl, apiKey) {
       },
       {
         parameters: {
-          jsCode: `// استخراج رقم الهاتف واسم العميل ونص الرسالة
+          jsCode: `// استخراج رقم الهاتف واسم العميل ونص الرسالة وفحص إن كان قد تم الرد عليه
 const body = $input.first().json.body || $input.first().json;
 
 let phone = '';
 let name = '';
 let message = '';
+let alreadySent = body.already_sent === true || body.already_sent === 'true';
 
 // صيغة UltraMsg
 if (body.event_type === 'message_received' && body.data) {
@@ -1029,6 +1248,7 @@ return [{
     phone,
     name,
     message,
+    already_sent: alreadySent,
     originalPayload: body
   }
 }];`
@@ -1038,6 +1258,35 @@ return [{
         type: "n8n-nodes-base.code",
         typeVersion: 2,
         position: [400, 300]
+      },
+      {
+        parameters: {
+          conditions: {
+            options: {
+              caseSensitive: true,
+              leftValue: "",
+              typeValidation: "strict"
+            },
+            conditions: [
+              {
+                id: "cond-already-sent",
+                leftValue: "={{ $json.already_sent }}",
+                rightValue: true,
+                operator: {
+                  type: "boolean",
+                  operation: "equals"
+                }
+              }
+            ],
+            combinator: "and"
+          },
+          options: {}
+        },
+        id: "check-already-sent",
+        name: "If: هل تم إرسال الرد بالفعل من البوت؟",
+        type: "n8n-nodes-base.if",
+        typeVersion: 2,
+        position: [620, 300]
       },
       {
         parameters: {
@@ -1061,39 +1310,10 @@ return [{
           options: {}
         },
         id: "call-pos-api",
-        name: "HTTP: معالجة الاستفسار والذكاء الاصطناعي",
+        name: "HTTP: معالجة الاستفسار حسب السؤال فقط",
         type: "n8n-nodes-base.httpRequest",
         typeVersion: 4.2,
-        position: [620, 300]
-      },
-      {
-        parameters: {
-          conditions: {
-            options: {
-              caseSensitive: true,
-              leftValue: "",
-              typeValidation: "strict"
-            },
-            conditions: [
-              {
-                id: "cond-owner",
-                leftValue: "={{ $json.intent }}",
-                rightValue: "owner_inquiry",
-                operator: {
-                  type: "string",
-                  operation: "equals"
-                }
-              }
-            ],
-            combinator: "and"
-          },
-          options: {}
-        },
-        id: "check-intent",
-        name: "If: هل الاستفسار عن صاحب المحل؟",
-        type: "n8n-nodes-base.if",
-        typeVersion: 2,
-        position: [840, 300]
+        position: [860, 420]
       },
       {
         parameters: {
@@ -1115,37 +1335,23 @@ return [{
           },
           options: {}
         },
-        id: "send-owner-reply",
-        name: "HTTP: إرسال بيانات ومواعيد المعلم (UltraMsg)",
+        id: "send-unified-reply",
+        name: "HTTP: إرسال الرد للعميل على حسب السؤال فقط (UltraMsg)",
         type: "n8n-nodes-base.httpRequest",
         typeVersion: 4.2,
-        position: [1080, 200]
+        position: [1100, 420]
       },
       {
         parameters: {
-          method: "POST",
-          url: `https://api.ultramsg.com/${ultraInstance}/messages/chat`,
-          sendHeaders: true,
-          headerParameters: {
-            parameters: [
-              { name: "Content-Type", value: "application/json" }
-            ]
-          },
-          sendBody: true,
-          bodyParameters: {
-            parameters: [
-              { name: "token", value: ultraToken },
-              { name: "to", value: "={{ $json.phone }}" },
-              { name: "body", value: "={{ $json.reply }}" }
-            ]
-          },
+          respondWith: "json",
+          responseBody: "={{ { ok: true, message: 'تم استلام الرسالة وتسجيلها في النظام بدون تكرار إرسال', already_sent: true } }}",
           options: {}
         },
-        id: "send-product-reply",
-        name: "HTTP: إرسال عرض السعر الذكي للعميل (UltraMsg)",
-        type: "n8n-nodes-base.httpRequest",
-        typeVersion: 4.2,
-        position: [1080, 400]
+        id: "respond-logged-only",
+        name: "Respond to Webhook: تم التسجيل بدون تكرار",
+        type: "n8n-nodes-base.respondToWebhook",
+        typeVersion: 1.1,
+        position: [860, 180]
       },
       {
         parameters: {
@@ -1157,7 +1363,7 @@ return [{
         name: "Respond to Webhook: إرجاع الرد",
         type: "n8n-nodes-base.respondToWebhook",
         typeVersion: 1.1,
-        position: [1320, 300]
+        position: [1340, 420]
       },
       {
         parameters: {
@@ -1170,7 +1376,7 @@ return [{
         name: "Webhook: استلام حملة تسويقية من البرنامج",
         type: "n8n-nodes-base.webhook",
         typeVersion: 2,
-        position: [180, 560]
+        position: [180, 600]
       },
       {
         parameters: {
@@ -1193,7 +1399,7 @@ return recipients.map(c => ({
         name: "Code: تجهيز رسائل المستهدفين للحملة",
         type: "n8n-nodes-base.code",
         typeVersion: 2,
-        position: [420, 560]
+        position: [420, 600]
       },
       {
         parameters: {
@@ -1219,7 +1425,44 @@ return recipients.map(c => ({
         name: "HTTP: إرسال رسائل العرض عبر واتساب (UltraMsg)",
         type: "n8n-nodes-base.httpRequest",
         typeVersion: 4.2,
-        position: [680, 560]
+        position: [680, 600]
+      },
+      {
+        parameters: {
+          rule: {
+            interval: [
+              {
+                field: "weeks",
+                triggerAtDay: [0],
+                triggerAtHour: 12
+              }
+            ]
+          }
+        },
+        id: "weekly-schedule-trigger",
+        name: "Schedule: إرسال العروض الأسبوعية المخصصة كل أحد",
+        type: "n8n-nodes-base.scheduleTrigger",
+        typeVersion: 1.2,
+        position: [180, 800]
+      },
+      {
+        parameters: {
+          method: "POST",
+          url: `${cleanUrl}/api/bot/campaigns/send-weekly`,
+          sendHeaders: true,
+          headerParameters: {
+            parameters: [
+              { name: "X-Bot-Key", value: key },
+              { name: "Content-Type", value: "application/json" }
+            ]
+          },
+          options: {}
+        },
+        id: "run-weekly-campaign",
+        name: "HTTP: تشغيل العروض الأسبوعية المخصصة حسب الاهتمامات",
+        type: "n8n-nodes-base.httpRequest",
+        typeVersion: 4.2,
+        position: [420, 800]
       }
     ],
     connections: {
@@ -1230,26 +1473,21 @@ return recipients.map(c => ({
       },
       "Code: تنسيق وتجهيز البيانات": {
         main: [
-          [{ node: "HTTP: معالجة الاستفسار والذكاء الاصطناعي", type: "main", index: 0 }]
+          [{ node: "If: هل تم إرسال الرد بالفعل من البوت؟", type: "main", index: 0 }]
         ]
       },
-      "HTTP: معالجة الاستفسار والذكاء الاصطناعي": {
+      "If: هل تم إرسال الرد بالفعل من البوت؟": {
         main: [
-          [{ node: "If: هل الاستفسار عن صاحب المحل؟", type: "main", index: 0 }]
+          [{ node: "Respond to Webhook: تم التسجيل بدون تكرار", type: "main", index: 0 }],
+          [{ node: "HTTP: معالجة الاستفسار حسب السؤال فقط", type: "main", index: 0 }]
         ]
       },
-      "If: هل الاستفسار عن صاحب المحل؟": {
+      "HTTP: معالجة الاستفسار حسب السؤال فقط": {
         main: [
-          [{ node: "HTTP: إرسال بيانات ومواعيد المعلم (UltraMsg)", type: "main", index: 0 }],
-          [{ node: "HTTP: إرسال عرض السعر الذكي للعميل (UltraMsg)", type: "main", index: 0 }]
+          [{ node: "HTTP: إرسال الرد للعميل على حسب السؤال فقط (UltraMsg)", type: "main", index: 0 }]
         ]
       },
-      "HTTP: إرسال بيانات ومواعيد المعلم (UltraMsg)": {
-        main: [
-          [{ node: "Respond to Webhook: إرجاع الرد", type: "main", index: 0 }]
-        ]
-      },
-      "HTTP: إرسال عرض السعر الذكي للعميل (UltraMsg)": {
+      "HTTP: إرسال الرد للعميل على حسب السؤال فقط (UltraMsg)": {
         main: [
           [{ node: "Respond to Webhook: إرجاع الرد", type: "main", index: 0 }]
         ]
@@ -1262,6 +1500,11 @@ return recipients.map(c => ({
       "Code: تجهيز رسائل المستهدفين للحملة": {
         main: [
           [{ node: "HTTP: إرسال رسائل العرض عبر واتساب (UltraMsg)", type: "main", index: 0 }]
+        ]
+      },
+      "Schedule: إرسال العروض الأسبوعية المخصصة كل أحد": {
+        main: [
+          [{ node: "HTTP: تشغيل العروض الأسبوعية المخصصة حسب الاهتمامات", type: "main", index: 0 }]
         ]
       }
     },
@@ -1297,6 +1540,7 @@ function registerBotRoutes(app) {
       store_owner_phone: get("SELECT value FROM settings WHERE key = 'store_owner_phone'")?.value || '01050592877',
       store_owner_schedule: get("SELECT value FROM settings WHERE key = 'store_owner_schedule'")?.value || 'متواجد يومياً بالمحل من 5:00 مساءً حتى 11:00 مساءً عدا الجمعة',
       store_owner_custom_reply: get("SELECT value FROM settings WHERE key = 'store_owner_custom_reply'")?.value || 'المعلم متواجد في المحل حسب المواعيد الموضحة، ولأي استفسار عاجل يمكنك التواصل معه مباشرة عبر هاتفه الخاص.',
+      bot_weekly_campaign_enabled: get("SELECT value FROM settings WHERE key = 'bot_weekly_campaign_enabled'")?.value !== '0',
       api_inquiry_url: `${origin}/api/bot/inquiry`,
       api_products_url: `${origin}/api/bot/products`
     });
@@ -1317,7 +1561,8 @@ function registerBotRoutes(app) {
       store_owner_name,
       store_owner_phone,
       store_owner_schedule,
-      store_owner_custom_reply
+      store_owner_custom_reply,
+      bot_weekly_campaign_enabled
     } = req.body || {};
 
     if (n8n_webhook_url !== undefined) {
@@ -1328,6 +1573,9 @@ function registerBotRoutes(app) {
     }
     if (bot_auto_quote_enabled !== undefined) {
       run("INSERT INTO settings (key, value) VALUES ('bot_auto_quote_enabled', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [bot_auto_quote_enabled ? '1' : '0']);
+    }
+    if (bot_weekly_campaign_enabled !== undefined) {
+      run("INSERT INTO settings (key, value) VALUES ('bot_weekly_campaign_enabled', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [bot_weekly_campaign_enabled ? '1' : '0']);
     }
     if (ultramsg_instance_id !== undefined) {
       run("INSERT INTO settings (key, value) VALUES ('ultramsg_instance_id', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [String(ultramsg_instance_id || '').trim()]);
@@ -1464,10 +1712,10 @@ function registerBotRoutes(app) {
     res.json({ ok: true, count: customers.length, customers });
   });
 
-  // 8. Update customer details (notes, name, interests)
+  // 8. Update customer details (notes, name, interests, primary_interest)
   app.put('/api/bot/customers/:id', botOrUserAuth, (req, res) => {
     const id = Number(req.params.id);
-    const { name, notes, interests } = req.body || {};
+    const { name, notes, interests, primary_interest } = req.body || {};
 
     const existing = get('SELECT id FROM whatsapp_customers WHERE id = ?', [id]);
     if (!existing) return res.status(404).json({ error: 'العميل غير موجود' });
@@ -1476,9 +1724,10 @@ function registerBotRoutes(app) {
       UPDATE whatsapp_customers
       SET name = COALESCE(?, name),
           notes = COALESCE(?, notes),
-          interests = COALESCE(?, interests)
+          interests = COALESCE(?, interests),
+          primary_interest = COALESCE(?, primary_interest)
       WHERE id = ?
-    `, [name !== undefined ? name : null, notes !== undefined ? notes : null, interests !== undefined ? interests : null, id]);
+    `, [name !== undefined ? name : null, notes !== undefined ? notes : null, interests !== undefined ? interests : null, primary_interest !== undefined ? primary_interest : null, id]);
 
     res.json({ ok: true, message: 'تم تحديث بيانات العميل بنجاح' });
   });
@@ -1622,6 +1871,26 @@ function registerBotRoutes(app) {
     res.json({ ok: true, campaigns });
   });
 
+  // 12b. Preview personalized weekly offers per customer
+  app.get('/api/bot/campaigns/preview-weekly', botOrUserAuth, async (req, res) => {
+    try {
+      const data = await previewWeeklyPersonalizedOffers();
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // 12c. Dispatch personalized weekly offers per customer
+  app.post('/api/bot/campaigns/send-weekly', botOrUserAuth, async (req, res) => {
+    try {
+      const result = await sendWeeklyPersonalizedOffers();
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
   // 13. Download / View ready-to-import n8n Workflow JSON
   app.get('/api/bot/n8n-workflow', (req, res) => {
     const origin = `${req.protocol}://${req.get('host') || 'localhost:3000'}`;
@@ -1720,6 +1989,8 @@ module.exports = {
   startUltraMsgLiveSync,
   classifyCustomerMessage,
   processCustomerMessageReply,
-  callGeminiApi
+  callGeminiApi,
+  previewWeeklyPersonalizedOffers,
+  sendWeeklyPersonalizedOffers
 };
 

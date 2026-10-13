@@ -500,6 +500,9 @@ function migrate() {
   if (!columnExists('purchase_items', 'serials_json')) db.exec('ALTER TABLE purchase_items ADD COLUMN serials_json TEXT');
   if (!columnExists('sale_items', 'serials_json')) db.exec('ALTER TABLE sale_items ADD COLUMN serials_json TEXT');
   if (!columnExists('purchases', 'user_id')) db.exec('ALTER TABLE purchases ADD COLUMN user_id INTEGER');
+  if (!columnExists('whatsapp_customers', 'primary_interest')) db.exec("ALTER TABLE whatsapp_customers ADD COLUMN primary_interest TEXT DEFAULT ''");
+  if (!columnExists('whatsapp_customers', 'last_offer_sent_at')) db.exec("ALTER TABLE whatsapp_customers ADD COLUMN last_offer_sent_at TEXT");
+  if (!columnExists('whatsapp_customers', 'last_inquiry_text')) db.exec("ALTER TABLE whatsapp_customers ADD COLUMN last_inquiry_text TEXT DEFAULT ''");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS product_serials (

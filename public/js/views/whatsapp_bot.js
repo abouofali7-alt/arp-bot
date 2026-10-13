@@ -329,6 +329,14 @@ async function wbLoadCustomersList() {
         `).join('');
       }
 
+      const primaryBadge = c.primary_interest 
+        ? `<div style="margin-bottom:4px;"><span class="badge badge-orange" style="font-weight:700;">🎯 ${esc(c.primary_interest)}</span></div>`
+        : '';
+
+      const lastOffer = c.last_offer_sent_at 
+        ? `<div class="small" title="${esc(c.last_offer_sent_at)}">📅 ${fmtDate(c.last_offer_sent_at)}</div>`
+        : `<span class="badge badge-gray" style="font-size:0.75rem;">لم يُرسل بعد</span>`;
+
       return `
         <tr>
           <td>
@@ -338,9 +346,16 @@ async function wbLoadCustomersList() {
           <td dir="ltr" style="text-align:right; font-weight:700;">
             ${esc(c.phone)}
           </td>
-          <td style="max-width:280px;">${interestsBadges}</td>
+          <td style="max-width:240px;">
+            ${primaryBadge}
+            <div>${interestsBadges}</div>
+          </td>
+          <td style="max-width:220px;">
+            ${c.last_inquiry_text ? `<div class="small" style="white-space:pre-wrap; word-break:break-word; max-height:48px; overflow:hidden;" title="${esc(c.last_inquiry_text)}">💬 ${esc(c.last_inquiry_text)}</div>` : '<span class="muted small">-</span>'}
+          </td>
           <td class="num">${fmt(c.inquiries_count)}</td>
           <td class="small">${fmtDate(c.last_inquiry_at)}</td>
+          <td>${lastOffer}</td>
           <td style="white-space:nowrap; text-align:left;">
             <a href="https://wa.me/${esc(c.phone)}" target="_blank" class="btn btn-sm btn-success" title="محادثة واتساب">💬 مراسلة</a>
             <button class="btn btn-sm btn-secondary" onclick="wbOpenCustomerModal(${c.id})" title="تعديل">✏️</button>
@@ -358,9 +373,11 @@ async function wbLoadCustomersList() {
             <tr>
               <th>اسم العميل</th>
               <th>رقم الهاتف</th>
-              <th>الاهتمامات المسجلة</th>
+              <th>الاهتمام الأساسي والسجل</th>
+              <th>آخر استفسار من العميل</th>
               <th class="num">عدد الاستفسارات</th>
               <th>آخر تواصل</th>
+              <th>آخر عرض تسويقي</th>
               <th style="text-align:left;">إجراءات</th>
             </tr>
           </thead>
@@ -393,7 +410,12 @@ async function wbOpenCustomerModal(id) {
           <input type="text" id="wbEditCustName" value="${esc(c.name || '')}" placeholder="اسم العميل...">
         </div>
         <div class="form-group">
-          <label>الاهتمامات (مفصولة بفواصل)</label>
+          <label>الاهتمام الأساسي (Primary Interest)</label>
+          <input type="text" id="wbEditCustPrimaryInterest" value="${esc(c.primary_interest || '')}" placeholder="مثال: شواحن واكسسوارات، صيانة ودعم فني...">
+          <div class="small muted">التصنيف الرئيسي لاحتياجات هذا العميل والذي تُبنى عليه العروض الأسبوعية الذكية</div>
+        </div>
+        <div class="form-group">
+          <label>الاهتمامات المتراكمة (مفصولة بفواصل)</label>
           <input type="text" id="wbEditCustInterests" value="${esc(c.interests || '')}" placeholder="شواحن, ايفون, صيانة...">
           <div class="small muted">اكتب الكلمات أو الأقسام التي يفضلها العميل لتصل له العروض الخاصة بها</div>
         </div>
@@ -414,11 +436,12 @@ async function wbOpenCustomerModal(id) {
 
 async function wbSaveCustomer(id) {
   const name = document.getElementById('wbEditCustName')?.value;
+  const primary_interest = document.getElementById('wbEditCustPrimaryInterest')?.value;
   const interests = document.getElementById('wbEditCustInterests')?.value;
   const notes = document.getElementById('wbEditCustNotes')?.value;
 
   try {
-    await API.put(`/api/bot/customers/${id}`, { name, interests, notes });
+    await API.put(`/api/bot/customers/${id}`, { name, primary_interest, interests, notes });
     closeModal();
     toast('تم حفظ بيانات العميل بنجاح');
     wbLoadCustomersList();
@@ -443,11 +466,49 @@ async function wbDeleteCustomer(id) {
    ========================================================================= */
 async function wbRenderCampaignsTab(container) {
   container.innerHTML = `
+    <!-- Card: Smart Personalized Weekly Offers -->
+    <div class="card" style="margin-bottom:18px; border-color:var(--primary); background:linear-gradient(135deg, rgba(37,99,235,0.04), rgba(16,185,129,0.04));">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:12px;">
+        <div>
+          <div class="card-title" style="margin-bottom:4px; font-size:1.15rem; color:var(--primary);">
+            <span>🎯 العروض الأسبوعية الذكية المخصصة (حسب اهتمامات كل عميل)</span>
+            <span class="badge badge-green">ميزة حصرية بالذكاء الاصطناعي ✨</span>
+          </div>
+          <div class="small muted">
+            يقوم النظام آلياً بتحليل المنتجات التي سأل عنها كل عميل (شواحن، صيانة، سماعات...) ومطابقتها بالمخزون الحقيقي، ثم صياغة عرض مصري مخصص له كل أسبوع بدون إزعاج أو تكرار.
+          </div>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <button class="btn btn-secondary" onclick="wbLoadWeeklyOffersPreview()">👁️ معاينة العروض المخصصة</button>
+          <button class="btn btn-success" id="wbSendWeeklyOffersBtn" onclick="wbSendWeeklyOffersNow()">🚀 إرسال العروض الأسبوعية الآن للمؤهلين</button>
+        </div>
+      </div>
+
+      <div style="background:var(--bg); border:1px solid var(--border); border-radius:10px; padding:12px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+        <label style="display:flex; align-items:center; gap:10px; cursor:pointer; margin:0;">
+          <input type="checkbox" id="wbWeeklyCampaignToggle" onchange="wbToggleWeeklyCampaign(this.checked)" style="width:18px; height:18px;">
+          <div>
+            <b style="font-size:0.95rem;">تفعيل الإرسال التلقائي الأسبوعي كل يوم أحد الساعة 12:00 ظهراً ⏰</b>
+            <div class="small muted">يرسل العروض آلياً أسبوعياً فقط للعملاء المؤهلين (الذين لم يستلموا عرضاً خلال آخر 7 أيام) لحماية الحساب من الحظر.</div>
+          </div>
+        </label>
+        <div class="small" id="wbWeeklyCampaignStatus" style="font-weight:700; color:var(--primary);"></div>
+      </div>
+
+      <div id="wbWeeklyPreviewArea" style="display:none; margin-top:14px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:8px;">
+          <b style="font-size:0.95rem;">📋 مسودات العروض المخصصة المجهزة للعملاء:</b>
+          <span id="wbWeeklyEligibleCount" class="badge badge-blue"></span>
+        </div>
+        <div id="wbWeeklyPreviewTableContainer"></div>
+      </div>
+    </div>
+
     <div class="grid-2">
       <div>
         <div class="card">
-          <div class="card-title">📢 إطلاق حملة عروض جديدة</div>
-          <p class="small muted mb-10">صمم رسالة العرض الترويجي واستهدف بها العملاء المهتمين بمنتجات أو أقسام معينة لزيادة المبيعات:</p>
+          <div class="card-title">📢 إطلاق حملة عروض عامة فورية</div>
+          <p class="small muted mb-10">صمم رسالة عرض ترويجي موحدة وأرسلها يدوياً لفئة مستهدفة من العملاء:</p>
           
           <div class="form-group">
             <label>عنوان الحملة (داخلي)</label>
@@ -474,7 +535,7 @@ async function wbRenderCampaignsTab(container) {
           </div>
 
           <div class="modal-foot" style="justify-content:flex-start; gap:10px;">
-            <button class="btn btn-success" id="wbSendCampBtn" onclick="wbExecuteCampaign()">🚀 إرسال العرض الآن</button>
+            <button class="btn btn-success" id="wbSendCampBtn" onclick="wbExecuteCampaign()">🚀 إرسال العرض العام الآن</button>
             <button class="btn btn-secondary" onclick="wbSwitchTab('n8n')">⚙️ ضبط Webhook الربط مع n8n</button>
           </div>
         </div>
@@ -497,6 +558,7 @@ async function wbRenderCampaignsTab(container) {
   wbPopulateTargetOptions();
   wbUpdateCampaignPreview();
   wbLoadCampaignsHistory();
+  wbInitWeeklyCampaignToggle();
 }
 
 async function wbPopulateTargetOptions() {
@@ -616,6 +678,131 @@ async function wbLoadCampaignsHistory() {
     `;
   } catch (err) {
     container.innerHTML = `<div class="alert error">${esc(err.message)}</div>`;
+  }
+}
+
+async function wbInitWeeklyCampaignToggle() {
+  const toggle = document.getElementById('wbWeeklyCampaignToggle');
+  const status = document.getElementById('wbWeeklyCampaignStatus');
+  if (!toggle) return;
+
+  try {
+    const cfg = await API.get('/api/bot/config');
+    toggle.checked = cfg.bot_weekly_campaign_enabled !== false;
+    if (status) {
+      status.textContent = toggle.checked ? '✅ الجدولة التلقائية مفعّلة' : '⏸️ الجدولة التلقائية متوقفة';
+    }
+  } catch {}
+}
+
+async function wbToggleWeeklyCampaign(checked) {
+  const status = document.getElementById('wbWeeklyCampaignStatus');
+  try {
+    await API.put('/api/bot/config', { bot_weekly_campaign_enabled: checked });
+    if (status) {
+      status.textContent = checked ? '✅ الجدولة التلقائية مفعّلة' : '⏸️ الجدولة التلقائية متوقفة';
+    }
+    toast(checked ? 'تم تفعيل الجدولة التلقائية كل أحد الساعة 12 ظهراً' : 'تم إيقاف الجدولة التلقائية للأسبوع');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+async function wbLoadWeeklyOffersPreview() {
+  const area = document.getElementById('wbWeeklyPreviewArea');
+  const container = document.getElementById('wbWeeklyPreviewTableContainer');
+  const countBadge = document.getElementById('wbWeeklyEligibleCount');
+  if (!area || !container) return;
+
+  area.style.display = 'block';
+  container.innerHTML = '<div style="text-align:center; padding:20px;" class="muted">جاري تحليل اهتمامات العملاء ومطابقتها مع المخزون وصياغة العروض المخصصة بالذكاء الاصطناعي... ⏳</div>';
+
+  try {
+    const res = await API.get('/api/bot/campaigns/preview-weekly');
+    const previews = res.previews || [];
+
+    if (previews.length === 0) {
+      container.innerHTML = '<div style="text-align:center; padding:20px;" class="muted">لا توجد سجلات عملاء كافية حتى الآن لتجهيز عروض مخصصة.</div>';
+      if (countBadge) countBadge.textContent = '0 عميل';
+      return;
+    }
+
+    const eligibleCount = previews.filter(p => p.is_eligible_now).length;
+    if (countBadge) {
+      countBadge.textContent = `${eligibleCount} عميل مستحق للإرسال الآن من أصل ${previews.length}`;
+    }
+
+    const rows = previews.map(p => {
+      const statusBadge = p.is_eligible_now
+        ? '<span class="badge badge-green">✅ مؤهل للإرسال الآن</span>'
+        : `<span class="badge badge-orange" title="آخر عرض: ${esc(p.last_offer_sent_at)}">⏳ فترة تهدئة 7 أيام</span>`;
+
+      return `
+        <tr>
+          <td>
+            <b>${esc(p.name)}</b>
+            <div class="small muted" dir="ltr" style="text-align:right;">${esc(p.phone)}</div>
+          </td>
+          <td>
+            <span class="badge badge-blue">🎯 ${esc(p.primary_interest)}</span>
+          </td>
+          <td>
+            <b>${esc(p.product_name)}</b>
+            ${p.sale_price ? `<div class="small text-success font-bold">${fmtMoney(p.sale_price)}</div>` : ''}
+          </td>
+          <td style="max-width:320px; font-size:0.83rem; white-space:pre-wrap; background:rgba(0,0,0,0.02); padding:8px; border-radius:6px;">${esc(p.preview_message)}</td>
+          <td>${statusBadge}</td>
+          <td style="white-space:nowrap;">
+            <a href="https://wa.me/${esc(p.phone)}" target="_blank" class="btn btn-sm btn-ghost" title="محادثة واتساب">💬 مراسلة</a>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    container.innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>العميل</th>
+              <th>الاهتمام المكتشف</th>
+              <th>المنتج المطابق من المخزن</th>
+              <th>نص الرسالة المخصصة المقترحة</th>
+              <th>حالة الأهلية</th>
+              <th>إجراء</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch (err) {
+    container.innerHTML = `<div class="alert error">تعذر تحميل العروض: ${esc(err.message)}</div>`;
+  }
+}
+
+async function wbSendWeeklyOffersNow() {
+  if (!confirm('هل أنت متأكد من بدء إرسال العروض الأسبوعية الذكية المخصصة الآن للعملاء المؤهلين؟\\n(يتم وضع فاصل زمني 3 ثوانٍ بين كل رسالة لحماية رقم واتساب من الحظر)')) return;
+
+  const btn = document.getElementById('wbSendWeeklyOffersBtn');
+  if (btn) btn.disabled = true;
+
+  showAlert('جاري إرسال العروض المخصصة للعملاء المستحقين عبر واتساب... يرجى الانتظار ⏳', 'info');
+  try {
+    const res = await API.post('/api/bot/campaigns/send-weekly');
+    if (res.ok) {
+      showAlert(`🎉 ${res.message || `تم إرسال العروض بنجاح إلى ${res.sent_count} عميل!`}`, 'success');
+      wbLoadCampaignsHistory();
+      wbLoadWeeklyOffersPreview();
+    } else {
+      showAlert(res.error || 'تعذر إرسال العروض الأسبوعية', 'error');
+    }
+  } catch (err) {
+    showAlert('خطأ أثناء إرسال العروض: ' + err.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
