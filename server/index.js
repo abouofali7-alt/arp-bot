@@ -2571,7 +2571,7 @@ app.post('/api/backup/factory-reset', auth, adminOnly, (req, res) => {
       for (const tbl of tablesToResetSeq) {
         try { run('DELETE FROM sqlite_sequence WHERE name = ?', [tbl]); } catch (e) {}
       }
-    });
+    })();
 
     console.log('>> [Reset] تمت إعادة ضبط بيانات البرنامج بنجاح مع الاحتفاظ بكافة بيانات وإعدادات البوت والواتساب.');
     res.json({ ok: true, safety: path.basename(safety) });
