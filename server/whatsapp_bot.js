@@ -89,12 +89,16 @@ function normalizeArabicText(str) {
 // Arabic stop words commonly found in customer inquiries
 const STOP_WORDS = new Set([
   'بكام', 'كام', 'سعر', 'اسعار', 'أسعار', 'سعره', 'سعرو', 'سعرها', 'اسعارهم',
-  'عندكم', 'عندك', 'ممكن', 'عايز', 'عاوز', 'عايزين', 'عاوزين', 'لو', 'سمحت',
-  'احجز', 'احجزلي', 'موجود', 'متوفر', 'في', 'فيه', 'هل', 'ايه', 'إيه', 'معلش',
-  'تفاصيل', 'عرض', 'عروض', 'اريد', 'بدي', 'شكد', 'قديه', 'تكلفة', 'ثمن', 'من',
-  'فضلك', 'سلام', 'عليكم', 'السلام', 'صباح', 'الخير', 'مساء', 'شكرا', 'يا',
-  'باشا', 'فندم', 'كابتن', 'استاذ', 'معلم', 'اخوي', 'حبيبي', 'ارخص', 'اغلى',
-  'افضل', 'احسن', 'عندي', 'سؤال', 'استفسار', 'طلب'
+  'عامله', 'عاملة', 'عامل', 'تعمل', 'يعمل', 'تمن', 'تمنه', 'تمنها',
+  'عندكم', 'عندك', 'عندكو', 'معندكش', 'معندكمش', 'ممكن', 'عايز', 'عاوز', 'عايزين', 'عاوزين',
+  'محتاج', 'محتاجين', 'بدور', 'لو', 'سمحت', 'احجز', 'احجزلي', 'موجود', 'متوفر', 'في', 'فيه',
+  'هل', 'ايه', 'إيه', 'معلش', 'تفاصيل', 'عرض', 'عروض', 'اريد', 'بدي', 'شكد', 'قديه',
+  'تكلفة', 'ثمن', 'من', 'فضلك', 'سلام', 'عليكم', 'السلام', 'صباح', 'الخير', 'مساء',
+  'شكرا', 'يا', 'باشا', 'فندم', 'كابتن', 'استاذ', 'معلم', 'اخوي', 'حبيبي', 'ارخص',
+  'اغلى', 'افضل', 'احسن', 'عندي', 'سؤال', 'استفسار', 'طلب', 'اي', 'أي', 'بقولك',
+  'قولي', 'علي', 'على', 'هو', 'هي', 'دي', 'ده', 'دا', 'حتى', 'حتي', 'حاجه', 'حاجة',
+  'مستعمل', 'مستعملة', 'مستعمله', 'جديد', 'جديدة', 'جديده', 'حضرتك', 'باشمهندس', 'مهندس',
+  'ولا', 'يعني'
 ]);
 
 function extractSearchKeywords(rawText) {
@@ -103,10 +107,21 @@ function extractSearchKeywords(rawText) {
   // Remove symbols and punctuation
   const cleaned = normalized.replace(/[\?؟!,;:\.\-_/\\()\[\]{}""'«»*&^%$#@~`+=|<>]/g, ' ');
   const words = cleaned.split(/\s+/).filter(Boolean);
-  const meaningfulWords = words.filter(w => !STOP_WORDS.has(w) && w.length > 1);
+
+  const isStopWord = (w) => {
+    if (STOP_WORDS.has(w)) return true;
+    if (w.startsWith('و') && w.length > 2 && STOP_WORDS.has(w.slice(1))) return true;
+    if (w.startsWith('ب') && w.length > 2 && STOP_WORDS.has(w.slice(1))) return true;
+    if (w.startsWith('ف') && w.length > 2 && STOP_WORDS.has(w.slice(1))) return true;
+    if (w.startsWith('ال') && w.length > 3 && STOP_WORDS.has(w.slice(2))) return true;
+    return false;
+  };
+
+  const meaningfulWords = words.filter(w => !isStopWord(w) && w.length >= 3);
 
   if (meaningfulWords.length === 0) {
-    return words.filter(w => w.length > 1).join(' ');
+    const fallbackWords = words.filter(w => !isStopWord(w) && w.length >= 2);
+    return fallbackWords.join(' ');
   }
   return meaningfulWords.join(' ');
 }
@@ -118,8 +133,8 @@ function searchProducts(rawText, limit = 3) {
     return { keyword: '', products: [] };
   }
 
-  const tokens = keyword.split(/\s+/).filter(Boolean);
-  
+  const tokens = keyword.split(/\s+/).filter(t => t.length >= 3);
+
   // 1. Direct search on full keyword phrase
   const phrasePattern = `%${keyword}%`;
   let query = `
@@ -134,7 +149,7 @@ function searchProducts(rawText, limit = 3) {
   `;
   let matches = all(query, [phrasePattern, keyword, phrasePattern, limit]);
 
-  // 2. If no exact phrase matches, search by individual tokens
+  // 2. If no exact phrase matches and multiple tokens, search requiring ALL tokens (AND match)
   if (matches.length === 0 && tokens.length > 1) {
     const conditions = tokens.map(() => `(p.name LIKE ? OR (c.name IS NOT NULL AND c.name LIKE ?))`).join(' AND ');
     const params = [];
@@ -155,27 +170,7 @@ function searchProducts(rawText, limit = 3) {
     matches = all(tokenQuery, params);
   }
 
-  // 3. If still no matches and multiple tokens, try OR match for top results
-  if (matches.length === 0 && tokens.length > 1) {
-    const orConditions = tokens.map(() => `(p.name LIKE ? OR (c.name IS NOT NULL AND c.name LIKE ?))`).join(' OR ');
-    const params = [];
-    tokens.forEach(t => {
-      params.push(`%${t}%`, `%${t}%`);
-    });
-    params.push(limit);
-
-    const orQuery = `
-      SELECT p.id, p.barcode, p.name, p.sale_price, p.stock, p.unit, p.active,
-             c.name as category_name
-      FROM products p
-      LEFT JOIN categories c ON p.category_id = c.id
-      WHERE p.active = 1 AND (${orConditions})
-      ORDER BY (p.stock > 0) DESC, p.id DESC
-      LIMIT ?
-    `;
-    matches = all(orQuery, params);
-  }
-
+  // NOTE: Strict inventory protection - NEVER do loose OR matching to prevent returning irrelevant items like cameras or cables.
   return { keyword, products: matches };
 }
 
@@ -195,19 +190,18 @@ function formatQuotationReply(products, originalQuery, greetingMsg) {
 }
 
 // Call Google Gemini API using native safeFetch (with multi-model quota failover)
-async function callGeminiApi(systemPrompt, userPrompt, apiKey, preferredModel = 'gemini-3.5-flash') {
+async function callGeminiApi(systemPrompt, userPrompt, apiKey, preferredModel = 'gemini-flash-lite-latest') {
   if (!apiKey || !String(apiKey).trim()) return null;
 
   const candidateModels = [];
   const addModel = (m) => {
     let clean = (m && String(m).trim()) || '';
-    if (clean.includes('1.5') || clean.includes('2.0') || clean.includes('2.5')) clean = 'gemini-3.5-flash';
+    if (clean.includes('1.5') || clean.includes('2.0') || clean.includes('2.5')) clean = 'gemini-flash-lite-latest';
     if (clean && !candidateModels.includes(clean)) candidateModels.push(clean);
   };
   addModel(preferredModel);
-  addModel('gemini-3.5-flash');
   addModel('gemini-flash-lite-latest');
-  addModel('gemini-3.8-flash');
+  addModel('gemini-3.5-flash');
 
   const payload = {
     contents: [
@@ -231,7 +225,7 @@ async function callGeminiApi(systemPrompt, userPrompt, apiKey, preferredModel = 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-        timeout: 10000
+        timeout: 5000
       });
 
       if (res.ok) {
@@ -459,11 +453,24 @@ function classifyCustomerMessage(rawText) {
   if (!rawText || !rawText.trim()) return { intent: 'general_chat' };
   const text = normalizeArabicText(rawText);
 
+  const sellUsedKeywords = [
+    'عايز ابيع', 'عاوز ابيع', 'عايز ابيعها', 'عاوز ابيعها', 'حابب ابيع', 'حاجات عايز ابيعها',
+    'حاجات عاوز ابيعها', 'عندي حاجات عايز ابيعها', 'عندى حاجات عايز ابيعها',
+    'بتشتروا مستعمل', 'بتشتروا اجهزه', 'بتشتروا اجهزة', 'بتشتروا شاشات', 'بتشتروا لابتوبات',
+    'شراء مستعمل', 'شراء اجهزه', 'استبدال جهاز', 'ابيع جهاز'
+  ];
+  if (sellUsedKeywords.some(sk => text.includes(normalizeArabicText(sk)))) {
+    return { intent: 'sell_used' };
+  }
+
   const buyKeywords = [
-    'بكام', 'كام سعر', 'سعر', 'اسعار', 'عندكم', 'عندك', 'عايز اشتري', 'عاوز اشتري',
-    'احجزلي', 'احجز', 'متوفر عندك', 'موجود عندك', 'عاوز كابل', 'عايز كابل',
-    'عاوز شاحن', 'عايز شاحن', 'عاوز باور', 'عايز باور', 'عاوز جراب', 'عايز جراب',
-    'عاوز سماعه', 'عايز سماعه', 'عاوز موبايل', 'عايز موبايل'
+    'بكام', 'كام سعر', 'سعر', 'اسعار', 'أسعار', 'سعره', 'سعرها', 'تمن', 'تمنه', 'تمنها',
+    'عامله كام', 'عامل كام', 'عامله كم', 'عامل كم', 'تكلفة', 'تكلفته',
+    'عندكم', 'عندك', 'عندكو', 'معندكش', 'معندكمش', 'عايز', 'عاوز', 'محتاج',
+    'بدور على', 'بدور علي', 'بدور ع', 'في عندك', 'في عندكم', 'متاح عندك', 'متاح عندكم',
+    'عايز اشتري', 'عاوز اشتري', 'احجزلي', 'احجز', 'متوفر عندك', 'متوفر عندكم',
+    'موجود عندك', 'موجود عندكم', 'شاشه', 'شاشة', 'كاميرا', 'كاميرات', 'كاميره',
+    'لابتوب', 'موبايل', 'شاحن', 'كابل', 'جراب', 'سماعه', 'باور بانك', 'راوتر'
   ];
   const hasBuyKeyword = buyKeywords.some(bk => text.includes(normalizeArabicText(bk)));
 
@@ -497,10 +504,14 @@ function classifyCustomerMessage(rawText) {
     'مش راضي يشحن', 'مش شغال', 'ما بيشتغلش', 'مش راضي يفتح', 'ما بيفتحش', 'مش بيفتح',
     'بيهنج', 'مهنج', 'بيفصل', 'اتكسر', 'مكسور', 'باظ', 'اتحرق', 'تغيير شاشه',
     'تغيير بطاريه', 'مشكله فنيه', 'عندي مشكله', 'مشكله في', 'عطلان', 'سوفت وير',
-    'بيطفي لوحده', 'الصوت واطي', 'المايك مش شغال', 'السماعه مش شغاله', 'الكاميرا فاصله'
+    'بيطفي لوحده', 'الصوت واطي', 'المايك مش شغال', 'السماعه مش شغاله', 'الكاميرا فاصله',
+    'دي في ار', 'dvr', 'اعمله صيانه', 'اعملها صيانه'
   ];
-  if (techKeywords.some(tk => text.includes(normalizeArabicText(tk))) && !hasBuyKeyword) {
-    return { intent: 'tech_support' };
+  if (techKeywords.some(tk => text.includes(normalizeArabicText(tk)))) {
+    const isExplicitBuy = ['عايز اشتري', 'عاوز اشتري', 'حابب اشتري', 'احجزلي'].some(bk => text.includes(normalizeArabicText(bk)));
+    if (!isExplicitBuy) {
+      return { intent: 'tech_support' };
+    }
   }
 
   const storeInfoKeywords = [
@@ -527,7 +538,7 @@ function classifyCustomerMessage(rawText) {
   }
 
   const { keyword, products } = searchProducts(text);
-  if (hasBuyKeyword || (products.length > 0 && keyword.length > 2 && !['صباح', 'مساء', 'سلام', 'خير', 'معلم', 'اخبارك'].includes(keyword))) {
+  if (hasBuyKeyword || (products.length > 0 && keyword.length >= 3 && !['صباح', 'مساء', 'سلام', 'خير', 'معلم', 'اخبارك'].includes(keyword))) {
     return { intent: 'product_inquiry', keyword, products };
   }
 
@@ -608,6 +619,24 @@ async function processCustomerMessageReply(rawText, cleanPhone = '', customerNam
       }
       if (!reply) {
         reply = `ألف سلامة! بخصوص المشكلة دي شرفنا في المحل أو تواصل مع الصيانة على ${ownerInfo.phone} وهنكشفلك على الجهاز ونحلهالك فوراً إن شاء الله 🔧`;
+      }
+    }
+  } else if (intent === 'sell_used') {
+    detectedInterests = ['بيع واستبدال أجهزة مستعملة'];
+    matchedProductsForLog = [{ id: 0, name: 'بيع أجهزة مستعملة للمحل', price: 0 }];
+    if (autoQuote) {
+      if (geminiKey) {
+        const prompt = `أنت في محل "${storeName}". الزبون يسأل عن بيع أجهزة لديه للمحل أو استبدالها.
+المطلوب: رد عليه بلطف واختصار بلهجة مصرية في سطرين (وضح أننا بنشتري ونستبدل الأجهزة بعد المعاينة والفحص في المحل، واطلب منه يشرفنا أو يرسل صور ومواصفات الجهاز).
+ممنوع ذكر أي أسعار جزافية.`;
+        const aiReply = await callGeminiApi(prompt, text, geminiKey, geminiModel);
+        if (aiReply) {
+          reply = aiReply;
+          isAiGenerated = true;
+        }
+      }
+      if (!reply) {
+        reply = `أهلاً بحضرتك يا فندم 🌸\nأيوة بنشتري ونستبدل الأجهزة بعد المعاينة والفحص في المحل، شرفنا في المحل أو ابعتلنا صور ومواصفات الأجهزة وحالتها وهنقيمها لحضرتك بأفضل سعر فوراً!`;
       }
     }
   } else if (intent === 'owner_inquiry') {
@@ -926,6 +955,8 @@ function startWeeklyCampaignScheduler() {
 
 let lastProcessedUltraMsgIds = new Set();
 let recentSentMessageTexts = new Set();
+const recentInboundCustomerEvents = new Map(); // key: `${cleanPhone}:${text}`, value: timestamp
+const activeCustomerProcessing = new Set(); // concurrency lock per cleanPhone
 let ultraMsgPollingTimer = null;
 let isPollingActive = false;
 
@@ -984,72 +1015,103 @@ async function handleUltraMsgIncomingMessage(msg) {
     return;
   }
 
-  console.log(`[UltraMsg Bot] رسالة فورية من ${cleanPhone} (${customerName}): "${text}"`);
-
-  // 1. Log inbound message
-  logWhatsAppMessage(cleanPhone, 'inbound', text, []);
-
-  // 2. Process message using unified multi-intent handler
-  const result = await processCustomerMessageReply(text, cleanPhone, customerName);
-  const reply = result.reply;
-
-  // 3. Send outbound reply
-  if (reply) {
-    console.log(`[UltraMsg Bot] جاري إرسال الرد التلقائي (${result.is_ai ? 'Gemini AI ✨' : 'محلي ⚡'}) [Intent: ${result.intent}] إلى ${cleanPhone}...`);
-
-    recentSentMessageTexts.add(reply.trim());
-    if (recentSentMessageTexts.size > 200) {
-      const arr = Array.from(recentSentMessageTexts);
-      recentSentMessageTexts = new Set(arr.slice(-100));
+  // 6. Anti-Duplicate: Check if identical text was received from this customer within 20 seconds
+  const dedupeKey = `${cleanPhone}:${text}`;
+  const now = Date.now();
+  if (recentInboundCustomerEvents.has(dedupeKey)) {
+    const lastTimestamp = recentInboundCustomerEvents.get(dedupeKey);
+    if (now - lastTimestamp < 20000) {
+      console.log(`[UltraMsg Bot] ⚠️ تم تجاهل رسالة مكررة من ${cleanPhone} خلال 20 ثانية: "${text}"`);
+      return;
     }
+  }
+  recentInboundCustomerEvents.set(dedupeKey, now);
 
-    const sendRes = await sendUltraMsgMessage(cleanPhone, reply);
-    if (sendRes.ok) {
-      console.log(`[UltraMsg Bot] تم تسليم الرد بنجاح إلى ${cleanPhone}`);
-      logWhatsAppMessage(cleanPhone, 'outbound', reply, result.matched_products);
-    } else {
-      console.error(`[UltraMsg Bot] خطأ أثناء إرسال الرد:`, sendRes.error);
+  if (recentInboundCustomerEvents.size > 500) {
+    for (const [k, ts] of recentInboundCustomerEvents.entries()) {
+      if (now - ts > 60000) recentInboundCustomerEvents.delete(k);
     }
   }
 
-  // 4. Notify local n8n workflow if listening
+  // 7. Concurrency Lock: Prevent parallel processing of multiple messages for the same customer phone
+  if (activeCustomerProcessing.has(cleanPhone)) {
+    console.log(`[UltraMsg Bot] ⚠️ جاري معالجة رسالة أخرى لنفس العميل ${cleanPhone} حالياً، تم منع التكرار.`);
+    return;
+  }
+  activeCustomerProcessing.add(cleanPhone);
+
   try {
-    const n8nPayload = JSON.stringify({
-      event_type: 'message_received',
-      already_sent: true,
-      intent: result.intent,
-      instanceId: '193963',
-      phone: cleanPhone,
-      name: customerName,
-      message: text,
-      reply: reply,
-      is_ai: result.is_ai,
-      data: {
-        id: msg.id || ('msg_' + Date.now()),
-        from: msg.from || cleanPhone,
-        to: msg.to || '201050592877@c.us',
-        pushname: customerName,
-        body: text,
-        type: 'chat',
-        fromMe: false
+    console.log(`[UltraMsg Bot] رسالة فورية من ${cleanPhone} (${customerName}): "${text}"`);
+
+    // 1. Log inbound message
+    logWhatsAppMessage(cleanPhone, 'inbound', text, []);
+
+    // 2. Process message using unified multi-intent handler
+    const result = await processCustomerMessageReply(text, cleanPhone, customerName);
+    const reply = result.reply;
+
+    // 3. Send outbound reply
+    if (reply) {
+      console.log(`[UltraMsg Bot] جاري إرسال الرد التلقائي (${result.is_ai ? 'Gemini AI ✨' : 'محلي ⚡'}) [Intent: ${result.intent}] إلى ${cleanPhone}...`);
+
+      recentSentMessageTexts.add(reply.trim());
+      if (recentSentMessageTexts.size > 200) {
+        const arr = Array.from(recentSentMessageTexts);
+        recentSentMessageTexts = new Set(arr.slice(-100));
       }
-    });
 
-    const n8nUrls = [
-      'http://127.0.0.1:5678/webhook/whatsapp-incoming',
-      'http://127.0.0.1:5678/webhook/ff390232-0c21-4abe-8b58-e151695c52dc/whatsapp-incoming',
-      'http://127.0.0.1:5678/webhook-test/whatsapp-incoming',
-      'http://127.0.0.1:5678/webhook-test/ff390232-0c21-4abe-8b58-e151695c52dc/whatsapp-incoming'
-    ];
+      const sendRes = await sendUltraMsgMessage(cleanPhone, reply);
+      if (sendRes.ok) {
+        console.log(`[UltraMsg Bot] تم تسليم الرد بنجاح إلى ${cleanPhone}`);
+        logWhatsAppMessage(cleanPhone, 'outbound', reply, result.matched_products);
+      } else {
+        console.error(`[UltraMsg Bot] خطأ أثناء إرسال الرد:`, sendRes.error);
+      }
+    }
 
-    n8nUrls.forEach(url => {
-      safeFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: n8nPayload
-      }).catch(() => {});
-    });
-  } catch {}
+    // 4. Notify local n8n workflow if listening
+    try {
+      const n8nPayload = JSON.stringify({
+        event_type: 'message_received',
+        already_sent: true,
+        intent: result.intent,
+        instanceId: '193963',
+        phone: cleanPhone,
+        name: customerName,
+        message: text,
+        reply: reply,
+        is_ai: result.is_ai,
+        data: {
+          id: msg.id || ('msg_' + Date.now()),
+          from: msg.from || cleanPhone,
+          to: msg.to || '201050592877@c.us',
+          pushname: customerName,
+          body: text,
+          type: 'chat',
+          fromMe: false
+        }
+      });
+
+      const n8nUrls = [
+        'http://127.0.0.1:5678/webhook/whatsapp-incoming',
+        'http://127.0.0.1:5678/webhook/ff390232-0c21-4abe-8b58-e151695c52dc/whatsapp-incoming',
+        'http://127.0.0.1:5678/webhook-test/whatsapp-incoming',
+        'http://127.0.0.1:5678/webhook-test/ff390232-0c21-4abe-8b58-e151695c52dc/whatsapp-incoming'
+      ];
+
+      n8nUrls.forEach(url => {
+        safeFetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: n8nPayload
+        }).catch(() => {});
+      });
+    } catch {}
+  } finally {
+    setTimeout(() => {
+      activeCustomerProcessing.delete(cleanPhone);
+    }, 2000);
+  }
 }
 
 let smeeStreamReq = null;
@@ -1169,11 +1231,15 @@ function startUltraMsgLiveSync() {
     }
   } catch (e) {}
 
-  // 1. Start Instant Smee Webhook stream
-  startSmeeStreamListener();
+  // 1. Smee Webhook stream (only when explicitly enabled via ENABLE_SMEE=1)
+  if (process.env.ENABLE_SMEE === '1') {
+    startSmeeStreamListener();
+  }
 
-  // 2. Start polling backup every 5 seconds
-  ultraMsgPollingTimer = setInterval(pollUltraMsgIncoming, 5000);
+  // 2. Polling backup (only when explicitly enabled via ENABLE_ULTRAMSG_POLL=1)
+  if (process.env.ENABLE_ULTRAMSG_POLL === '1') {
+    ultraMsgPollingTimer = setInterval(pollUltraMsgIncoming, 20000);
+  }
 }
 
 // Generate comprehensive n8n workflow blueprint
@@ -1681,12 +1747,18 @@ function registerBotRoutes(app) {
   });
 
   // 6. Direct Webhook receiver from UltraMsg
-  app.post('/api/bot/webhook/ultramsg', async (req, res) => {
+  app.post('/api/bot/webhook/ultramsg', (req, res) => {
+    // Respond HTTP 200 OK immediately so UltraMsg never times out or retries
+    res.status(200).json({ ok: true });
+
     const body = req.body || {};
     if (body.event_type === 'message_received' && body.data) {
-      await handleUltraMsgIncomingMessage(body.data);
+      setImmediate(() => {
+        handleUltraMsgIncomingMessage(body.data).catch(err => {
+          console.error('[UltraMsg Bot] Webhook processing error:', err.message);
+        });
+      });
     }
-    res.json({ ok: true });
   });
 
   // 7. Customers CRM list
@@ -1991,6 +2063,7 @@ module.exports = {
   processCustomerMessageReply,
   callGeminiApi,
   previewWeeklyPersonalizedOffers,
-  sendWeeklyPersonalizedOffers
+  sendWeeklyPersonalizedOffers,
+  handleUltraMsgIncomingMessage
 };
 
