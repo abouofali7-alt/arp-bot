@@ -56,9 +56,9 @@ async function renderSettings() {
           </table></div>
         </div>
         <div class="card" style="border-color:#dc2626">
-          <div class="card-title" style="color:#dc2626">⚠️ منطقة الخطر — إعادة ضبط المصنع</div>
-          <p class="small muted mb-10">بتمسح كل بيانات البرنامج نهائيًا (فواتير، منتجات، عملاء، موظفين، مصروفات...) وترجع النسخة الفارغة الثابتة بحساب المدير الافتراضي <b>admin / admin123</b>. قبل المسح بيتم عمل <b>نسخة أمان</b> من كل بياناتك الحالية تلقائيًا وتظهر في قائمة النسخ الاحتياطية فوق.</p>
-          <button class="btn btn-danger" onclick="factoryReset()">🔄 إعادة ضبط البرنامج بالكامل</button>
+          <div class="card-title" style="color:#dc2626">⚠️ منطقة الخطر — إعادة ضبط بيانات البرنامج</div>
+          <p class="small muted mb-10">بتمسح كل بيانات البرنامج ككل (فواتير، منتجات، مخزون، موردين، عملاء المتجر، موظفين، صيانة، مصروفات...) وترجع النسخة فارغة بحساب المدير الافتراضي <b>admin / admin123</b>، <b>مع الحفاظ التام على بيانات وسجلات وإعدادات بوت الواتساب</b>. قبل المسح بيتم حفظ <b>نسخة أمان</b> كاملة تلقائيًا وتظهر في قائمة النسخ الاحتياطية أعلاه.</p>
+          <button class="btn btn-danger" onclick="factoryReset()">🔄 إعادة ضبط البرنامج (مع الحفاظ على البوت)</button>
         </div>
         <div class="card">
           <div class="card-title">🕑 سجل الورديات (الكاشيرات)</div>
@@ -308,10 +308,10 @@ function backupRestore(name) {
 }
 
 async function factoryReset() {
-  if (!confirm('تحذير نهائي!\nسيتم مسح كل بيانات البرنامج نهائيًا والعودة للنسخة الفارغة.\nسيتم حفظ نسخة أمان من بياناتك الحالية أولًا.\n\nهل تريد المتابعة؟')) return;
+  if (!confirm('تحذير:\nسيتم مسح وتصفير كافة بيانات البرنامج ككل (المنتجات، المبيعات، المشتريات، العملاء، الصيانة...).\nمع الحفاظ التام على إعدادات وسجلات بوت الواتساب.\nسيتم حفظ نسخة أمان تلقائيًا أولًا.\n\nهل تريد المتابعة؟')) return;
   openModal(`
-    <div class="modal-head"><h3 style="color:#dc2626">⚠️ تأكيد إعادة الضبط النهائية</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <p class="small muted mb-10">هيتم مسح كل البيانات نهائيًا وعمل نسخة أمان تلقائيًا. اكتب كلمة <b>RESET</b> بحروف كبيرة في الخانة تحت للتأكيد:</p>
+    <div class="modal-head"><h3 style="color:#dc2626">⚠️ تأكيد إعادة الضبط (مع الحفاظ على البوت)</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <p class="small muted mb-10">سيتم تصفير كل بيانات البرنامج ككل، مع الاحتفاظ ببيانات وإعدادات البوت، وعمل نسخة أمان تلقائيًا. اكتب كلمة <b>RESET</b> بحروف كبيرة في الخانة لتأكيد العملية:</p>
     <div class="form-group"><input id="frConfirm" placeholder="اكتب RESET هنا" autocomplete="off"></div>
     <div class="modal-foot">
       <button class="btn btn-danger" onclick="factoryResetGo()">تنفيذ إعادة الضبط</button>
@@ -326,7 +326,7 @@ function factoryResetGo() {
   closeModal();
   API.post('/api/backup/factory-reset', {})
     .then((r) => {
-      alert('تمت إعادة الضبط بنجاح!\nنسخة الأمان: ' + r.safety + '\n\nهيتم تسجيل الخروج الآن — سجل دخول بحساب admin / admin123');
+      alert('تمت إعادة ضبط بيانات البرنامج بنجاح (مع الاحتفاظ التام ببيانات وإعدادات البوت)!\nنسخة الأمان: ' + r.safety + '\n\nسيتم تسجيل الخروج الآن — سجل الدخول بحساب admin / admin123');
       logout();
     })
     .catch(e => showAlert(e.message, 'error'));

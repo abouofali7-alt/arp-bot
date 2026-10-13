@@ -2488,13 +2488,92 @@ app.get('/api/backup/download/:name', auth, adminOnly, (req, res) => {
 app.post('/api/backup/factory-reset', auth, adminOnly, (req, res) => {
   try {
     const safety = backup();
-    makeFactoryBaseline();
-    restore('baseline-factory.db');
-    if (!get('SELECT id FROM users WHERE username = ?', ['admin'])) {
+
+    transaction(() => {
+      // 1. Clear transactional tables
+      run('DELETE FROM sale_items');
+      run('DELETE FROM sales');
+      run('DELETE FROM return_items');
+      run('DELETE FROM returns');
+      run('DELETE FROM purchase_items');
+      run('DELETE FROM purchases');
+      run('DELETE FROM payments');
+
+      // 2. Clear maintenance, repairs & spare parts
+      run('DELETE FROM job_parts');
+      run('DELETE FROM maintenance_payments');
+      run('DELETE FROM maintenance_jobs');
+      run('DELETE FROM spare_stock_moves');
+      run('DELETE FROM spare_parts');
+      run('DELETE FROM part_supplier_payments');
+      run('DELETE FROM part_suppliers');
+
+      // 3. Clear inventory, products, categories & serials
+      run('DELETE FROM product_serials');
+      run('DELETE FROM price_history');
+      run('DELETE FROM products');
+      run('DELETE FROM categories');
+      run('DELETE FROM stocktake_items');
+      run('DELETE FROM stocktakes');
+      run('DELETE FROM coupons');
+      run('DELETE FROM used_devices');
+
+      // 4. Clear financial & operational records
+      run('DELETE FROM expenses');
+      run('DELETE FROM employee_commissions');
+      run('DELETE FROM vacations');
+      run('DELETE FROM salary_closings');
+      run('DELETE FROM employees');
+      run('DELETE FROM partner_txns');
+      run('DELETE FROM partners');
+      run('DELETE FROM shifts');
+      run('DELETE FROM parties');
+
+      // 5. Reset users: remove non-admin users, reset admin password to admin123
+      run('DELETE FROM users WHERE username != ?', ['admin']);
+      let branchId = null;
+      if (get('SELECT COUNT(*) AS c FROM branches').c === 0) {
+        const b = run('INSERT INTO branches (name, code, address, phone) VALUES (?,?,?,?)', ['الفرع الرئيسي', 'BR-001', '', '']);
+        branchId = b.lastInsertRowid;
+      } else {
+        branchId = get('SELECT id FROM branches ORDER BY id LIMIT 1').id;
+      }
+
       const hash = bcrypt.hashSync('admin123', 10);
-      run('INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)',
-        ['admin', hash, 'مدير النظام', 'admin']);
-    }
+      if (get('SELECT id FROM users WHERE username = ?', ['admin'])) {
+        run('UPDATE users SET password_hash = ?, full_name = ?, role = ?, branch_id = ? WHERE username = ?',
+          [hash, 'مدير النظام', 'admin', branchId, 'admin']);
+      } else {
+        run('INSERT INTO users (username, password_hash, full_name, role, branch_id) VALUES (?,?,?,?,?)',
+          ['admin', hash, 'مدير النظام', 'admin', branchId]);
+      }
+
+      // 6. Delete all settings EXCEPT bot settings and license
+      run(`
+        DELETE FROM settings 
+        WHERE key NOT LIKE 'bot_%' 
+          AND key NOT LIKE 'ultramsg_%' 
+          AND key NOT LIKE 'gemini_%' 
+          AND key NOT LIKE 'store_owner_%' 
+          AND key NOT IN ('license_json', 'store_name', 'n8n_webhook_url')
+      `);
+
+      // 7. Reset auto-increment sequences for wiped tables so IDs start fresh from 1
+      const tablesToResetSeq = [
+        'sale_items', 'sales', 'return_items', 'returns', 'purchase_items', 'purchases',
+        'payments', 'job_parts', 'maintenance_payments', 'maintenance_jobs',
+        'spare_stock_moves', 'spare_parts', 'part_supplier_payments', 'part_suppliers',
+        'product_serials', 'price_history', 'products', 'categories', 'stocktake_items',
+        'stocktakes', 'coupons', 'used_devices', 'expenses', 'employee_commissions',
+        'vacations', 'salary_closings', 'employees', 'partner_txns', 'partners',
+        'shifts', 'parties'
+      ];
+      for (const tbl of tablesToResetSeq) {
+        try { run('DELETE FROM sqlite_sequence WHERE name = ?', [tbl]); } catch (e) {}
+      }
+    });
+
+    console.log('>> [Reset] تمت إعادة ضبط بيانات البرنامج بنجاح مع الاحتفاظ بكافة بيانات وإعدادات البوت والواتساب.');
     res.json({ ok: true, safety: path.basename(safety) });
   } catch (e) {
     res.status(400).json({ error: e.message });
