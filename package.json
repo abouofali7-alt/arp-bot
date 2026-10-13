@@ -1,6 +1,6 @@
 {
   "name": "arp-grocery-store",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "ARP نظام ادارة الكترونيات — إدارة المبيعات والمخزون والصيانة",
   "main": "electron/main.js",
   "scripts": {
@@ -14,7 +14,7 @@
     "appId": "com.arp.grocery",
     "productName": "ARP Grocery POS",
     "directories": {
-      "output": "release-1.5.0"
+      "output": "release-1.5.1"
     },
     "files": [
       "electron/**/*",
