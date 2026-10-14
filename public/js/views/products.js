@@ -1,4 +1,4 @@
-let PROD = { q: '', cat: '', nav: [] };
+let PROD = { q: '', cat: '', nav: [], low_stock_only: false };
 
 if (!window._CAT_PICKER_DOC_BOUND) {
   window._CAT_PICKER_DOC_BOUND = true;
@@ -9,6 +9,10 @@ if (!window._CAT_PICKER_DOC_BOUND) {
 }
 
 async function renderProducts() {
+  if (window._PRE_FILTER_LOW_STOCK) {
+    PROD.low_stock_only = true;
+    delete window._PRE_FILTER_LOW_STOCK;
+  }
   const el = document.getElementById('viewContainer');
   el.innerHTML = `
     <div class="toolbar">
@@ -17,6 +21,9 @@ async function renderProducts() {
         <button type="button" class="cat-picker-btn" onclick="catPickerToggle(event)"><span id="catPickerLabel">📂 كل الأقسام</span><span class="arrow">▾</span></button>
         <div class="cat-menu" id="catMenu"></div>
       </div>
+      <button class="btn ${PROD.low_stock_only ? 'btn-danger' : 'btn-secondary'}" id="btnLowStockFilter" onclick="toggleLowStockFilter()" title="تصفية المنتجات التي وصل مخزونها للحد الأدنى أو نفدت">
+        ${PROD.low_stock_only ? '⚠️ عرض كل المنتجات' : '⚠️ نواقص المخزون'}
+      </button>
       ${can('products.edit') ? `
       <button class="btn" onclick="prodOpenForm()">➕ منتج جديد</button>
       <button class="btn btn-secondary" onclick="catsManage()">🗂️ الأقسام</button>
@@ -129,10 +136,11 @@ async function prodLoad() {
   const params = new URLSearchParams();
   if (PROD.q) params.set('q', PROD.q);
   if (PROD.cat) params.set('category_id', PROD.cat);
+  if (PROD.low_stock_only) params.set('low_stock', '1');
   const my = ++window._PROD_REQ;
   const list = await API.get('/api/products?' + params.toString());
   if (my !== window._PROD_REQ) return;
-  document.getElementById('prodCount').textContent = list.length + ' منتج';
+  document.getElementById('prodCount').textContent = list.length + (PROD.low_stock_only ? ' منتج ناقص' : ' منتج');
   document.getElementById('prodTable').innerHTML = list.map(p => `
     <tr>
       <td class="small">${esc(p.barcode || '—')}</td>
@@ -153,6 +161,16 @@ async function prodLoad() {
         </div>
       </td>
     </tr>`).join('') || '<tr><td colspan="9"><div class="empty">لا توجد منتجات</div></td></tr>';
+}
+
+function toggleLowStockFilter() {
+  PROD.low_stock_only = !PROD.low_stock_only;
+  const btn = document.getElementById('btnLowStockFilter');
+  if (btn) {
+    btn.className = `btn ${PROD.low_stock_only ? 'btn-danger' : 'btn-secondary'}`;
+    btn.textContent = PROD.low_stock_only ? '⚠️ عرض كل المنتجات' : '⚠️ نواقص المخزون';
+  }
+  prodLoad();
 }
 
 async function prodViewSerials(id, name) {

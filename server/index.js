@@ -361,6 +361,7 @@ app.post('/api/categories/move-subs', auth, permOrAdmin('products.edit'), (req, 
 app.get('/api/products', auth, (req, res) => {
   const q = req.query.q || '';
   const cat = req.query.category_id || '';
+  const lowStock = req.query.low_stock === '1' || req.query.low_stock === 'true';
   let sql = `SELECT p.*, c.name AS category_name, pc.name AS parent_cat_name, gc.name AS grand_cat_name,
              (SELECT GROUP_CONCAT(serial_number, ',') FROM product_serials ps WHERE ps.product_id = p.id AND ps.status = 'available') AS available_serials_str
              FROM products p LEFT JOIN categories c ON c.id = p.category_id
@@ -387,6 +388,9 @@ app.get('/api/products', auth, (req, res) => {
       sql += ' AND p.category_id = ?';
       params.push(Number(cat));
     }
+  }
+  if (lowStock) {
+    sql += ' AND p.stock <= p.min_stock AND p.active = 1';
   }
   sql += ' ORDER BY p.name';
   const products = all(sql, params).map(p => ({
@@ -1847,7 +1851,8 @@ app.get('/api/reports/dashboard', auth, permOrAdmin('reports'), (req, res) => {
     recent_purchases: all(`SELECT pu.*, pa.name AS supplier_name
                            FROM purchases pu JOIN parties pa ON pa.id = pu.supplier_id
                            ORDER BY pu.id DESC LIMIT 8`),
-    low_stock: all(`SELECT * FROM products WHERE stock <= min_stock AND active = 1 ORDER BY stock LIMIT 10`),
+    low_stock_count: get('SELECT COUNT(*) AS c FROM products WHERE stock <= min_stock AND active = 1').c,
+    low_stock: all(`SELECT * FROM products WHERE stock <= min_stock AND active = 1 ORDER BY stock LIMIT 50`),
     product_count: get('SELECT COUNT(*) AS c FROM products WHERE active = 1').c,
     category_count: get('SELECT COUNT(*) AS c FROM categories').c,
     top_products: all(`SELECT si.name, SUM(si.qty) AS qty, SUM(si.total) AS total

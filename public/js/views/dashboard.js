@@ -29,8 +29,12 @@ async function renderDashboard() {
       <div class="stat blue"><div class="icon">🧾</div><div class="label">فواتير الشراء — الشهر</div>
         <div class="value">${d.month_purchases.count}</div>
         <div class="small muted">بقيمة ${fmt(d.month_purchases.total)} ${SETTINGS.currency || 'ج'}</div></div>
-      <div class="stat red"><div class="icon">⚠️</div><div class="label">منتجات ناقصة المخزون</div>
-        <div class="value">${d.low_stock.length}</div></div>
+      <div class="stat red pointer" onclick="viewLowStockProducts()" style="cursor:pointer;" title="اضغط لعرض كافة المنتجات الناقصة">
+        <div class="icon">⚠️</div>
+        <div class="label">منتجات ناقصة المخزون</div>
+        <div class="value">${d.low_stock_count !== undefined ? d.low_stock_count : d.low_stock.length}</div>
+        <div class="small muted">اضغط لعرض النواقص ←</div>
+      </div>
       <div class="stat"><div class="icon">📦</div><div class="label">عدد المنتجات</div>
         <div class="value">${d.product_count}</div></div>
       <div class="stat blue"><div class="icon">🗂️</div><div class="label">الأقسام</div>
@@ -86,7 +90,8 @@ async function renderDashboard() {
           </tbody></table></div>` : '<div class="empty">لا توجد مبيعات بعد</div>'}
       </div>
       <div class="card">
-        <div class="card-title">تحذيرات المخزون</div>
+        <div class="card-title">تحذيرات المخزون ${d.low_stock_count ? `(${d.low_stock_count} منتج)` : ''}
+          <a href="#" onclick="viewLowStockProducts(); return false;" class="small">عرض الكل في المنتجات ←</a></div>
         ${d.low_stock.length ? `
         <div class="table-wrap"><table>
           <thead><tr><th>المنتج</th><th class="num">المخزون</th><th class="num">الحد الأدنى</th></tr></thead>
@@ -105,4 +110,13 @@ async function renderDashboard() {
       </div>
     </div>
   `;
+}
+
+function viewLowStockProducts() {
+  if (typeof PROD !== 'undefined') {
+    PROD.low_stock_only = true;
+  } else {
+    window._PRE_FILTER_LOW_STOCK = true;
+  }
+  navigate('products');
 }
