@@ -458,53 +458,7 @@ function initSchema() {
       FOREIGN KEY (user_id) REFERENCES users(id),
       FOREIGN KEY (branch_id) REFERENCES branches(id)
     );
-  `);
-  migrate();
-}
 
-function columnExists(table, col) {
-  const res = db.exec(`PRAGMA table_info(${table})`);
-  if (!res || !res.length) return false;
-  return res[0].values.some(r => r[1] === col);
-}
-
-function migrate() {
-  if (!columnExists('sales', 'customer_phone')) db.exec("ALTER TABLE sales ADD COLUMN customer_phone TEXT DEFAULT ''");
-  if (!columnExists('sales', 'customer_name')) db.exec("ALTER TABLE sales ADD COLUMN customer_name TEXT DEFAULT ''");
-  if (!columnExists('coupons', 'party_id')) db.exec('ALTER TABLE coupons ADD COLUMN party_id INTEGER');
-  if (!columnExists('coupons', 'source')) db.exec("ALTER TABLE coupons ADD COLUMN source TEXT DEFAULT 'manual'");
-  if (!columnExists('payments', 'employee_id')) db.exec('ALTER TABLE payments ADD COLUMN employee_id INTEGER');
-  if (!columnExists('payments', 'pay_type')) db.exec("ALTER TABLE payments ADD COLUMN pay_type TEXT DEFAULT 'other'");
-  if (!columnExists('categories', 'parent_id')) db.exec('ALTER TABLE categories ADD COLUMN parent_id INTEGER');
-  if (!columnExists('maintenance_jobs', 'deposit')) db.exec('ALTER TABLE maintenance_jobs ADD COLUMN deposit REAL NOT NULL DEFAULT 0');
-  if (!columnExists('maintenance_jobs', 'due_date')) db.exec('ALTER TABLE maintenance_jobs ADD COLUMN due_date TEXT');
-  if (!columnExists('maintenance_jobs', 'claim_until')) db.exec('ALTER TABLE maintenance_jobs ADD COLUMN claim_until TEXT');
-  if (!columnExists('job_parts', 'purchase_price')) db.exec('ALTER TABLE job_parts ADD COLUMN purchase_price REAL NOT NULL DEFAULT 0');
-  if (!columnExists('sales', 'payments_json')) db.exec('ALTER TABLE sales ADD COLUMN payments_json TEXT');
-  if (!columnExists('shifts', 'closed_by')) db.exec('ALTER TABLE shifts ADD COLUMN closed_by INTEGER');
-  if (!columnExists('shifts', 'expected_cash')) db.exec('ALTER TABLE shifts ADD COLUMN expected_cash REAL');
-  if (!columnExists('users', 'permissions')) db.exec('ALTER TABLE users ADD COLUMN permissions TEXT');
-  if (!columnExists('sales', 'delivery_fee')) db.exec('ALTER TABLE sales ADD COLUMN delivery_fee REAL NOT NULL DEFAULT 0');
-  if (!columnExists('sales', 'delivery_address')) db.exec("ALTER TABLE sales ADD COLUMN delivery_address TEXT DEFAULT ''");
-  if (!columnExists('vacations', 'days')) db.exec('ALTER TABLE vacations ADD COLUMN days INTEGER NOT NULL DEFAULT 0');
-  if (!columnExists('vacations', 'deduction')) db.exec('ALTER TABLE vacations ADD COLUMN deduction REAL NOT NULL DEFAULT 0');
-  if (!columnExists('employees', 'emp_role')) db.exec("ALTER TABLE employees ADD COLUMN emp_role TEXT DEFAULT 'general'");
-  if (!columnExists('employees', 'pay_type')) db.exec("ALTER TABLE employees ADD COLUMN pay_type TEXT NOT NULL DEFAULT 'fixed'");
-  if (!columnExists('shifts', 'summary_json')) db.exec('ALTER TABLE shifts ADD COLUMN summary_json TEXT');
-  if (!columnExists('expenses', 'method')) db.exec("ALTER TABLE expenses ADD COLUMN method TEXT DEFAULT 'cash'");
-  if (!columnExists('payments', 'method')) db.exec("ALTER TABLE payments ADD COLUMN method TEXT DEFAULT 'cash'");
-  if (!columnExists('partner_txns', 'method')) db.exec("ALTER TABLE partner_txns ADD COLUMN method TEXT NOT NULL DEFAULT 'cash'");
-  if (!columnExists('used_devices', 'purchase_method')) db.exec("ALTER TABLE used_devices ADD COLUMN purchase_method TEXT DEFAULT 'cash'");
-  if (!columnExists('used_devices', 'sale_method')) db.exec("ALTER TABLE used_devices ADD COLUMN sale_method TEXT DEFAULT 'cash'");
-  if (!columnExists('products', 'has_serials')) db.exec('ALTER TABLE products ADD COLUMN has_serials INTEGER NOT NULL DEFAULT 0');
-  if (!columnExists('purchase_items', 'serials_json')) db.exec('ALTER TABLE purchase_items ADD COLUMN serials_json TEXT');
-  if (!columnExists('sale_items', 'serials_json')) db.exec('ALTER TABLE sale_items ADD COLUMN serials_json TEXT');
-  if (!columnExists('purchases', 'user_id')) db.exec('ALTER TABLE purchases ADD COLUMN user_id INTEGER');
-  if (!columnExists('whatsapp_customers', 'primary_interest')) db.exec("ALTER TABLE whatsapp_customers ADD COLUMN primary_interest TEXT DEFAULT ''");
-  if (!columnExists('whatsapp_customers', 'last_offer_sent_at')) db.exec("ALTER TABLE whatsapp_customers ADD COLUMN last_offer_sent_at TEXT");
-  if (!columnExists('whatsapp_customers', 'last_inquiry_text')) db.exec("ALTER TABLE whatsapp_customers ADD COLUMN last_inquiry_text TEXT DEFAULT ''");
-
-  db.exec(`
     CREATE TABLE IF NOT EXISTS product_serials (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       product_id INTEGER NOT NULL,
@@ -521,48 +475,15 @@ function migrate() {
       FOREIGN KEY (purchase_id) REFERENCES purchases(id),
       FOREIGN KEY (sale_id) REFERENCES sales(id)
     );
-  `);
-
-  const catSql = get("SELECT sql FROM sqlite_master WHERE type='table' AND name='categories'")?.sql || '';
-  if (catSql.includes('UNIQUE')) {
-    db.exec(`
-      PRAGMA foreign_keys = OFF;
-      CREATE TABLE categories_new (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        parent_id INTEGER
-      );
-      INSERT INTO categories_new (id, name, parent_id)
-      SELECT id, name, parent_id FROM categories;
-      DROP TABLE categories;
-      ALTER TABLE categories_new RENAME TO categories;
-      PRAGMA foreign_keys = ON;
-    `);
-  }
-
-  db.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_main_name ON categories(name) WHERE parent_id IS NULL;
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_sub_name ON categories(name, parent_id) WHERE parent_id IS NOT NULL;
-    CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories(parent_id);
-    CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);
-    CREATE INDEX IF NOT EXISTS idx_products_name ON products(name);
-    CREATE INDEX IF NOT EXISTS idx_products_active ON products(active);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_product_serials_unique ON product_serials(product_id, serial_number);
-    CREATE INDEX IF NOT EXISTS idx_product_serials_serial ON product_serials(serial_number);
-    CREATE INDEX IF NOT EXISTS idx_product_serials_status ON product_serials(status);
-    CREATE INDEX IF NOT EXISTS idx_sale_items_product ON sale_items(product_id);
-    CREATE INDEX IF NOT EXISTS idx_purchase_items_product ON purchase_items(product_id);
-    CREATE INDEX IF NOT EXISTS idx_sales_created ON sales(created_at);
-    CREATE INDEX IF NOT EXISTS idx_purchases_created ON purchases(created_at);
-    CREATE INDEX IF NOT EXISTS idx_used_devices_code ON used_devices(code);
-    CREATE INDEX IF NOT EXISTS idx_used_devices_serial ON used_devices(serial_number);
-    CREATE INDEX IF NOT EXISTS idx_used_devices_status ON used_devices(status);
 
     CREATE TABLE IF NOT EXISTS whatsapp_customers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       phone TEXT UNIQUE NOT NULL,
       name TEXT DEFAULT '',
       interests TEXT DEFAULT '',
+      primary_interest TEXT DEFAULT '',
+      last_inquiry_text TEXT DEFAULT '',
+      last_offer_sent_at TEXT,
       inquiries_count INTEGER NOT NULL DEFAULT 1,
       last_inquiry_at TEXT DEFAULT (datetime('now','localtime')),
       notes TEXT DEFAULT '',
@@ -589,8 +510,112 @@ function migrate() {
       created_at TEXT DEFAULT (datetime('now','localtime'))
     );
 
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_product_serials_unique ON product_serials(product_id, serial_number);
+    CREATE INDEX IF NOT EXISTS idx_product_serials_serial ON product_serials(serial_number);
+    CREATE INDEX IF NOT EXISTS idx_product_serials_status ON product_serials(status);
     CREATE INDEX IF NOT EXISTS idx_wa_customers_phone ON whatsapp_customers(phone);
     CREATE INDEX IF NOT EXISTS idx_wa_logs_phone ON whatsapp_logs(phone);
+  `);
+  migrate();
+}
+
+function tableExists(table) {
+  try {
+    const res = db.exec(`SELECT name FROM sqlite_master WHERE type='table' AND name='${table}'`);
+    return !!(res && res.length && res[0].values && res[0].values.length);
+  } catch {
+    return false;
+  }
+}
+
+function columnExists(table, col) {
+  if (!tableExists(table)) return false;
+  try {
+    const res = db.exec(`PRAGMA table_info(${table})`);
+    if (!res || !res.length) return false;
+    return res[0].values.some(r => r[1] === col);
+  } catch {
+    return false;
+  }
+}
+
+function safeAddColumn(table, col, typeDef) {
+  try {
+    if (tableExists(table) && !columnExists(table, col)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${typeDef}`);
+    }
+  } catch (e) {
+    console.warn(`[Migration Warning] Could not add column ${col} to ${table}:`, e.message);
+  }
+}
+
+function migrate() {
+  safeAddColumn('sales', 'customer_phone', "TEXT DEFAULT ''");
+  safeAddColumn('sales', 'customer_name', "TEXT DEFAULT ''");
+  safeAddColumn('coupons', 'party_id', 'INTEGER');
+  safeAddColumn('coupons', 'source', "TEXT DEFAULT 'manual'");
+  safeAddColumn('payments', 'employee_id', 'INTEGER');
+  safeAddColumn('payments', 'pay_type', "TEXT DEFAULT 'other'");
+  safeAddColumn('categories', 'parent_id', 'INTEGER');
+  safeAddColumn('maintenance_jobs', 'deposit', 'REAL NOT NULL DEFAULT 0');
+  safeAddColumn('maintenance_jobs', 'due_date', 'TEXT');
+  safeAddColumn('maintenance_jobs', 'claim_until', 'TEXT');
+  safeAddColumn('job_parts', 'purchase_price', 'REAL NOT NULL DEFAULT 0');
+  safeAddColumn('sales', 'payments_json', 'TEXT');
+  safeAddColumn('shifts', 'closed_by', 'INTEGER');
+  safeAddColumn('shifts', 'expected_cash', 'REAL');
+  safeAddColumn('users', 'permissions', 'TEXT');
+  safeAddColumn('sales', 'delivery_fee', 'REAL NOT NULL DEFAULT 0');
+  safeAddColumn('sales', 'delivery_address', "TEXT DEFAULT ''");
+  safeAddColumn('vacations', 'days', 'INTEGER NOT NULL DEFAULT 0');
+  safeAddColumn('vacations', 'deduction', 'REAL NOT NULL DEFAULT 0');
+  safeAddColumn('employees', 'emp_role', "TEXT DEFAULT 'general'");
+  safeAddColumn('employees', 'pay_type', "TEXT NOT NULL DEFAULT 'fixed'");
+  safeAddColumn('shifts', 'summary_json', 'TEXT');
+  safeAddColumn('expenses', 'method', "TEXT DEFAULT 'cash'");
+  safeAddColumn('payments', 'method', "TEXT DEFAULT 'cash'");
+  safeAddColumn('partner_txns', 'method', "TEXT NOT NULL DEFAULT 'cash'");
+  safeAddColumn('used_devices', 'purchase_method', "TEXT DEFAULT 'cash'");
+  safeAddColumn('used_devices', 'sale_method', "TEXT DEFAULT 'cash'");
+  safeAddColumn('products', 'has_serials', 'INTEGER NOT NULL DEFAULT 0');
+  safeAddColumn('purchase_items', 'serials_json', 'TEXT');
+  safeAddColumn('sale_items', 'serials_json', 'TEXT');
+  safeAddColumn('purchases', 'user_id', 'INTEGER');
+  safeAddColumn('whatsapp_customers', 'primary_interest', "TEXT DEFAULT ''");
+  safeAddColumn('whatsapp_customers', 'last_offer_sent_at', 'TEXT');
+  safeAddColumn('whatsapp_customers', 'last_inquiry_text', "TEXT DEFAULT ''");
+
+  const catSql = get("SELECT sql FROM sqlite_master WHERE type='table' AND name='categories'")?.sql || '';
+  if (catSql.includes('UNIQUE')) {
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      CREATE TABLE categories_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        parent_id INTEGER
+      );
+      INSERT INTO categories_new (id, name, parent_id)
+      SELECT id, name, parent_id FROM categories;
+      DROP TABLE categories;
+      ALTER TABLE categories_new RENAME TO categories;
+      PRAGMA foreign_keys = ON;
+    `);
+  }
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_main_name ON categories(name) WHERE parent_id IS NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_sub_name ON categories(name, parent_id) WHERE parent_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories(parent_id);
+    CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);
+    CREATE INDEX IF NOT EXISTS idx_products_name ON products(name);
+    CREATE INDEX IF NOT EXISTS idx_products_active ON products(active);
+    CREATE INDEX IF NOT EXISTS idx_sale_items_product ON sale_items(product_id);
+    CREATE INDEX IF NOT EXISTS idx_purchase_items_product ON purchase_items(product_id);
+    CREATE INDEX IF NOT EXISTS idx_sales_created ON sales(created_at);
+    CREATE INDEX IF NOT EXISTS idx_purchases_created ON purchases(created_at);
+    CREATE INDEX IF NOT EXISTS idx_used_devices_code ON used_devices(code);
+    CREATE INDEX IF NOT EXISTS idx_used_devices_serial ON used_devices(serial_number);
+    CREATE INDEX IF NOT EXISTS idx_used_devices_status ON used_devices(status);
   `);
 
   const botDefaults = {
