@@ -36,9 +36,23 @@ async function purchasesLoad() {
       <td class="num">${fmt(p.paid)}</td>
       <td><div class="flex" style="gap:4px">
         <button class="btn btn-secondary btn-sm" onclick="viewPurchase(${p.id})">عرض</button>
-        ${isAdminUser() ? `<button class="btn btn-warning btn-sm" onclick="purOpenForm(${p.id})" title="تعديل الفاتورة">✏️</button>` : ''}
+        ${isAdminUser() ? `
+          <button class="btn btn-warning btn-sm" onclick="purOpenForm(${p.id})" title="تعديل الفاتورة">✏️</button>
+          <button class="btn btn-danger btn-sm" onclick="purDelete(${p.id}, '${esc(p.invoice_no)}')" title="حذف الفاتورة نهائياً">🗑️ حذف</button>
+        ` : ''}
       </div></td>
     </tr>`).join('') || '<tr><td colspan="6"><div class="empty">لا توجد فواتير شراء</div></td></tr>';
+}
+
+async function purDelete(id, invoice_no) {
+  if (!confirm(`⚠️ هل أنت متأكد من رغبتك في حذف فاتورة الشراء (${invoice_no}) نهائياً؟\n\nتنبيه: سيتم التراجع عن كميات المخزون المضافة وتعديل رصيد المورد وحذف السيريالات المتبقية الخاصة بالفاتورة.`)) return;
+  try {
+    const res = await API.del('/api/purchases/' + id);
+    showAlert(res.message || 'تم حذف فاتورة الشراء بنجاح');
+    purchasesLoad();
+  } catch (e) {
+    showAlert(e.message || 'خطأ أثناء حذف فاتورة الشراء', 'error');
+  }
 }
 
 async function viewPurchase(id) {
@@ -123,12 +137,14 @@ function purEditSerials(idx) {
         </span>
       </div>
       <textarea id="serialsArea" rows="7" class="form-control" placeholder="امسح أو اكتب السيريالات هنا (كل سيريال في سطر)..." oninput="purUpdateSerialLiveCount()">${esc(serialsText)}</textarea>
+      <div id="purSerialDupWarning" class="small text-danger mt-5" style="font-weight:bold; display:none;"></div>
     </div>
     <div class="modal-foot">
       <button class="btn" onclick="purSaveItemSerials(${idx})">تأكيد الحفظ وتحديث الكمية 💾</button>
       <button class="btn btn-secondary" onclick="closeModal(true)">إلغاء</button>
     </div>
   `, false, true);
+  purUpdateSerialLiveCount();
 }
 
 function purUpdateSerialLiveCount() {
@@ -137,9 +153,26 @@ function purUpdateSerialLiveCount() {
   const count = list.length;
   const valEl = document.getElementById('purSerialCountVal');
   const badge = document.getElementById('purSerialCounterBadge');
+  const warnEl = document.getElementById('purSerialDupWarning');
   if (valEl) valEl.textContent = count;
-  if (badge) {
-    badge.className = count > 0 ? 'badge badge-green' : 'badge badge-gray';
+
+  // فحص التكرارات المباشرة
+  const seen = new Set();
+  const dups = [];
+  for (const s of list) {
+    if (seen.has(s)) dups.push(s);
+    seen.add(s);
+  }
+
+  if (dups.length > 0) {
+    if (badge) badge.className = 'badge badge-red';
+    if (warnEl) {
+      warnEl.style.display = 'block';
+      warnEl.textContent = `⚠️ تنبيه: يوجد سيريالات مكررة داخل القائمة: (${[...new Set(dups)].join('، ')})`;
+    }
+  } else {
+    if (badge) badge.className = count > 0 ? 'badge badge-green' : 'badge badge-gray';
+    if (warnEl) warnEl.style.display = 'none';
   }
 }
 
@@ -148,13 +181,52 @@ function purSaveItemSerials(idx) {
   if (!item) return;
   const text = document.getElementById('serialsArea')?.value || '';
   const list = text.split('\n').map(s => s.trim()).filter(Boolean);
+
+  // 1) فحص التكرار داخل نفس القائمة
+  const seen = new Set();
+  const duplicates = [];
+  for (const s of list) {
+    if (seen.has(s)) duplicates.push(s);
+    seen.add(s);
+  }
+  if (duplicates.length > 0) {
+    showAlert(`السيريال (${[...new Set(duplicates)].join('، ')}) مكرر في القائمة! يجب أن يكون كل سيريال فريداً.`, 'error');
+    return;
+  }
+
+  // 2) فحص التكرار مع أصناف أخرى داخل نفس الفاتورة
+  for (let otherIdx = 0; otherIdx < PURFORM.items.length; otherIdx++) {
+    if (otherIdx === idx) continue;
+    const other = PURFORM.items[otherIdx];
+    const otherSerials = other.serials || [];
+    for (const sn of list) {
+      if (otherSerials.includes(sn)) {
+        showAlert(`السيريال (${sn}) مسجل بالفعل لصنف آخر "${other.name}" في نفس الفاتورة!`, 'error');
+        return;
+      }
+    }
+  }
+
   item.serials = list;
   if (list.length > 0) {
     item.qty = list.length;
   }
   closeModal(true);
   purRenderItems();
+  purBindSearchEvents();
+  setTimeout(() => {
+    document.getElementById('purSearch')?.focus();
+  }, 100);
   showAlert(`تم حفظ ${list.length} سيريال وتحديث كمية الصنف تلقائياً إلى (${item.qty})`);
+}
+
+function purBindSearchEvents() {
+  const el = document.getElementById('purSearch');
+  if (!el) return;
+  el.oninput = purRenderProductOptions;
+  el.onkeydown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); purAddItem(); }
+  };
 }
 
 async function purOpenForm(editId = 0) {
@@ -170,16 +242,21 @@ async function purOpenForm(editId = 0) {
     editPu = await API.get('/api/purchases/' + editId);
     if (!editPu) { showAlert('فاتورة الشراء غير موجودة', 'error'); return; }
   }
-  PURFORM.products = products;
-  PURFORM.suppliers = suppliers;
+  PURFORM.products = products || [];
+  PURFORM.suppliers = suppliers || [];
   PURFORM.editing = editPu ? editPu.id : 0;
-  PURFORM.items = editPu ? editPu.items.map(i => ({
-    product_id: i.product_id,
-    name: i.name,
-    price: Number(i.price),
-    qty: Number(i.qty),
-    serials: i.serials_json ? JSON.parse(i.serials_json) : []
-  })) : [];
+  PURFORM.items = editPu ? editPu.items.map(i => {
+    const pInfo = (products || []).find(p => p.id === i.product_id);
+    return {
+      product_id: i.product_id,
+      name: i.name,
+      price: Number(i.price),
+      qty: Number(i.qty),
+      serials: i.serials_json ? JSON.parse(i.serials_json) : [],
+      has_serials: pInfo ? pInfo.has_serials : 0
+    };
+  }) : [];
+
   openModal(`
     <div class="modal-head"><h3>${editPu ? '✏️ تعديل فاتورة شراء ' + esc(editPu.invoice_no) : '📥 فاتورة شراء جديدة'}</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="form-group">
@@ -194,7 +271,7 @@ async function purOpenForm(editId = 0) {
       <div class="form-group" style="margin:0;flex:1"><label class="small muted">المدفوع للمورد</label><input type="number" id="purPaid" step="0.01" min="0" value="${editPu ? Number(editPu.paid) || 0 : ''}" placeholder="اتركه فاضياً = مسدد كامل"></div>
     </div>
     <div class="toolbar">
-      <input type="search" id="purSearch" placeholder="🔍 بحث بالاسم أو الباركود ثم Enter للإضافة..." class="grow">
+      <input type="search" id="purSearch" placeholder="🔍 بحث بالاسم أو الباركود ثم Enter للإضافة..." class="grow" oninput="purRenderProductOptions()" onkeydown="if(event.key==='Enter'){event.preventDefault();purAddItem();}">
       <button class="btn btn-accent" onclick="purAddItem()">➕ إضافة</button>
     </div>
     <div class="table-wrap" style="max-height:170px;overflow:auto;border:1px solid var(--border);border-radius:8px;margin-bottom:10px">
@@ -218,23 +295,28 @@ async function purOpenForm(editId = 0) {
       <button class="btn btn-secondary" onclick="closeModal()">إلغاء</button>
     </div>
   `, true);
-  document.getElementById('purSearch').addEventListener('input', purRenderProductOptions);
-  document.getElementById('purSearch').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); purAddItem(); }
-  });
+
+  purBindSearchEvents();
   purRenderProductOptions();
   purRenderItems();
+  setTimeout(() => {
+    document.getElementById('purSearch')?.focus();
+  }, 150);
 }
 
 function purRenderProductOptions() {
   const box = document.getElementById('purResults');
   if (!box) return;
-  const q = (document.getElementById('purSearch')?.value || '').trim();
+  const q = (document.getElementById('purSearch')?.value || '').trim().toLowerCase();
   if (!q) {
     box.innerHTML = '<tr><td><div class="empty small muted" style="padding:8px">اكتب اسم المنتج أو الباركود لتظهر نتائج البحث</div></td></tr>';
     return;
   }
-  const list = PURFORM.products.filter(p => p.name.includes(q) || (p.barcode && String(p.barcode).includes(q)));
+  const list = (PURFORM.products || []).filter(p => {
+    const n = String(p.name || '').toLowerCase();
+    const b = String(p.barcode || '').toLowerCase();
+    return n.includes(q) || b.includes(q);
+  });
   box.innerHTML = list.length === 0
     ? '<tr><td><div class="empty small muted" style="padding:8px">لا توجد نتائج مطابقة</div></td></tr>'
     : list.slice(0, 30).map(p => `
@@ -246,24 +328,42 @@ function purRenderProductOptions() {
 }
 
 function purPick(pid) {
-  const p = PURFORM.products.find(x => x.id === pid);
+  const p = (PURFORM.products || []).find(x => x.id === pid);
   if (!p) return;
   const existing = PURFORM.items.find(i => i.product_id === p.id);
-  if (existing) existing.qty += 1;
-  else PURFORM.items.unshift({ product_id: p.id, name: p.name, price: p.purchase_price, qty: 1, serials: [] });
-  document.getElementById('purSearch').value = '';
+  if (existing) {
+    existing.qty += 1;
+  } else {
+    PURFORM.items.unshift({
+      product_id: p.id,
+      name: p.name,
+      price: Number(p.purchase_price) || 0,
+      qty: 1,
+      serials: [],
+      has_serials: p.has_serials ? 1 : 0
+    });
+  }
+  const sInput = document.getElementById('purSearch');
+  if (sInput) {
+    sInput.value = '';
+    sInput.focus();
+  }
   purRenderProductOptions();
   purRenderItems();
 }
 
 function purAddItem() {
-  const q = (document.getElementById('purSearch')?.value || '').trim();
+  const q = (document.getElementById('purSearch')?.value || '').trim().toLowerCase();
   if (!q) return;
-  const p = PURFORM.products.find(x => x.name === q || (x.barcode && String(x.barcode) === q));
+  const p = (PURFORM.products || []).find(x => String(x.name || '').toLowerCase() === q || (x.barcode && String(x.barcode).toLowerCase() === q));
   if (p) { purPick(p.id); return; }
-  const ids = PURFORM.products.filter(x => x.name.includes(q)).slice(0, 30);
-  if (ids.length === 1) purPick(ids[0].id);
-  else if (ids.length > 0) { const el = document.getElementById('purItemsTable'); el.scrollIntoView(); }
+  const ids = (PURFORM.products || []).filter(x => String(x.name || '').toLowerCase().includes(q) || (x.barcode && String(x.barcode).toLowerCase().includes(q))).slice(0, 30);
+  if (ids.length === 1) {
+    purPick(ids[0].id);
+  } else if (ids.length > 0) {
+    const el = document.getElementById('purItemsTable');
+    if (el) el.scrollIntoView({ behavior: 'smooth' });
+  }
 }
 
 function purRenderItems() {
@@ -273,7 +373,7 @@ function purRenderItems() {
   const c2 = document.getElementById('purQtySum');
   if (c1) c1.textContent = '🧺 أصناف: ' + PURFORM.items.length;
   if (c2) c2.textContent = '📦 إجمالي الكميات: ' + fmt(PURFORM.items.reduce((s, i) => s + (Number(i.qty) || 0), 0));
-  const total = PURFORM.items.reduce((s, i) => s + i.price * i.qty, 0);
+  const total = PURFORM.items.reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.qty) || 0), 0);
   const disc = Number(document.getElementById('purDiscount')?.value) || 0;
   document.getElementById('purTotal').textContent = fmt(Math.max(0, total - disc));
   const dueLine = document.getElementById('purDueLine');
@@ -284,20 +384,34 @@ function purRenderItems() {
     const due = Math.max(0, Math.round((grand - paidAmt) * 100) / 100);
     dueLine.textContent = due > 0.001 ? `المتبقي على المورد (آجل): ${fmt(due)}` : '✅ مسددة بالكامل';
   }
+
   table.innerHTML = PURFORM.items.map((i, idx) => {
+    const isSerialTracked = i.has_serials === 1;
     const serialCount = (i.serials || []).length;
-    const serialsBadge = serialCount > 0
-      ? `<button type="button" class="btn btn-sm btn-secondary" style="font-size:0.75rem; padding:2px 6px; margin-top:2px;" onclick="purEditSerials(${idx})">🔢 سيريالات (${serialCount})</button>`
-      : `<button type="button" class="btn btn-sm btn-ghost" style="font-size:0.75rem; padding:2px 6px; margin-top:2px;" onclick="purEditSerials(${idx})">+ 🔢 إضافة سيريال</button>`;
+    let serialsBadge = '';
+    if (isSerialTracked) {
+      if (serialCount === 0) {
+        serialsBadge = `<button type="button" class="btn btn-sm btn-danger" style="font-size:0.75rem; padding:2px 8px; margin-top:2px; font-weight:bold;" onclick="purEditSerials(${idx})">⚠️ أضف السيريالات (مطلوب ${i.qty})</button>`;
+      } else if (serialCount !== Number(i.qty)) {
+        serialsBadge = `<button type="button" class="btn btn-sm btn-warning" style="font-size:0.75rem; padding:2px 8px; margin-top:2px; font-weight:bold;" onclick="purEditSerials(${idx})">⚠️ السيريالات (${serialCount}/${i.qty})</button>`;
+      } else {
+        serialsBadge = `<button type="button" class="btn btn-sm btn-secondary" style="font-size:0.75rem; padding:2px 8px; margin-top:2px;" onclick="purEditSerials(${idx})">✅ 🔢 سيريالات (${serialCount})</button>`;
+      }
+    } else {
+      serialsBadge = serialCount > 0
+        ? `<button type="button" class="btn btn-sm btn-secondary" style="font-size:0.75rem; padding:2px 6px; margin-top:2px;" onclick="purEditSerials(${idx})">🔢 سيريالات (${serialCount})</button>`
+        : `<button type="button" class="btn btn-sm btn-ghost" style="font-size:0.75rem; padding:2px 6px; margin-top:2px;" onclick="purEditSerials(${idx})">+ 🔢 إضافة سيريال</button>`;
+    }
+    const priceWarning = !(Number(i.price) > 0) ? 'border: 2px solid var(--danger); background:#fff5f5;' : '';
     return `
     <tr>
       <td>
-        <div><b>${esc(i.name)}</b></div>
+        <div><b>${esc(i.name)}</b> ${isSerialTracked ? '<span class="badge badge-blue" style="font-size:0.7rem;margin-right:4px;">🔢 محمي بسيريال</span>' : ''}</div>
         <div>${serialsBadge}</div>
       </td>
       <td class="num"><input type="number" style="width:80px" value="${i.qty}" min="0.01" step="0.01" onchange="PURFORM.items[${idx}].qty = Number(this.value); purRenderItems()"></td>
-      <td class="num"><input type="number" style="width:100px" value="${i.price}" step="0.01" onchange="PURFORM.items[${idx}].price = Number(this.value); purRenderItems()"></td>
-      <td class="num">${fmt(i.price * i.qty)}</td>
+      <td class="num"><input type="number" style="width:100px; ${priceWarning}" value="${i.price}" step="0.01" min="0.01" placeholder="سعر الشراء" onchange="PURFORM.items[${idx}].price = Number(this.value); purRenderItems()"></td>
+      <td class="num">${fmt((Number(i.price) || 0) * (Number(i.qty) || 0))}</td>
       <td><button class="cremove" style="background:none;border:none;color:var(--danger);cursor:pointer" onclick="PURFORM.items.splice(${idx},1); purRenderItems()">🗑️</button></td>
     </tr>`;
   }).join('') || '<tr><td colspan="5"><div class="empty">لا توجد أصناف — أضف منتجات</div></td></tr>';
@@ -305,13 +419,57 @@ function purRenderItems() {
 
 async function purSave() {
   const supplier_id = document.getElementById('purSupplier').value;
-  if (!supplier_id) { showAlert('اختر المورد', 'error'); return; }
-  if (PURFORM.items.length === 0) { showAlert('الفاتورة فارغة', 'error'); return; }
+  if (!supplier_id) { showAlert('اختر المورد أولاً', 'error'); return; }
+  if (PURFORM.items.length === 0) { showAlert('الفاتورة فارغة — يرجى إضافة أصناف', 'error'); return; }
+
+  // 1) فحص الكميات وأسعار الشراء
+  for (const item of PURFORM.items) {
+    const qty = Number(item.qty) || 0;
+    const price = Number(item.price) || 0;
+    if (qty <= 0) {
+      showAlert(`كمية الصنف "${item.name}" غير صحيحة!`, 'error');
+      return;
+    }
+    if (!(price > 0)) {
+      showAlert(`سعر الشراء للصنف "${item.name}" غير صحيح! لا يمكن حفظ فاتورة بسعر شراء صفر أو فارغ.`, 'error');
+      return;
+    }
+  }
+
+  // 2) فحص السيريالات للأصناف المحمية بالسيريال
+  for (const item of PURFORM.items) {
+    const isSerialTracked = item.has_serials === 1;
+    const serialCount = (item.serials || []).length;
+    const qty = Number(item.qty) || 0;
+    if (isSerialTracked) {
+      if (serialCount === 0) {
+        showAlert(`الصنف "${item.name}" محمي بتتبع السيريالات. يجب إضافة السيريالات الخاصة به قبل حفظ الفاتورة!`, 'error');
+        return;
+      }
+      if (serialCount !== qty) {
+        showAlert(`الصنف "${item.name}" يتطلب إدخال ${qty} سيريالات مطابقة للكمية تماماً (تم إدخال ${serialCount})!`, 'error');
+        return;
+      }
+    }
+  }
+
+  // 3) فحص عدم تكرار السيريالات عبر الفاتورة ككل
+  const allSerials = [];
+  for (const item of PURFORM.items) {
+    for (const sn of (item.serials || [])) {
+      if (allSerials.includes(sn)) {
+        showAlert(`السيريال (${sn}) مكرر داخل الفاتورة! لا يمكن تكرار نفس السيريال.`, 'error');
+        return;
+      }
+      allSerials.push(sn);
+    }
+  }
+
   try {
     if (PURFORM.editing) {
       await API.put('/api/purchases/' + PURFORM.editing + '/edit', {
         supplier_id,
-        items: PURFORM.items.map(i => ({ product_id: i.product_id, qty: i.qty, price: i.price, serials: i.serials || [] })),
+        items: PURFORM.items.map(i => ({ product_id: i.product_id, qty: Number(i.qty), price: Number(i.price), serials: i.serials || [] })),
         discount: Number(document.getElementById('purDiscount')?.value) || 0,
         paid: document.getElementById('purPaid')?.value ?? '',
       });
@@ -319,7 +477,7 @@ async function purSave() {
     } else {
       await API.post('/api/purchases', {
         supplier_id,
-        items: PURFORM.items.map(i => ({ product_id: i.product_id, qty: i.qty, price: i.price, serials: i.serials || [] })),
+        items: PURFORM.items.map(i => ({ product_id: i.product_id, qty: Number(i.qty), price: Number(i.price), serials: i.serials || [] })),
         discount: Number(document.getElementById('purDiscount')?.value) || 0,
         paid: document.getElementById('purPaid')?.value ?? '',
         payment_method: 'cash',

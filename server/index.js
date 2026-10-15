@@ -1472,12 +1472,18 @@ app.post('/api/purchases', auth, permOrAdmin('purchases.create'), (req, res) => 
       if (!p) return { error: 'منتج غير موجود' };
       const qty = Number(it.qty) || 0;
       const price = it.price !== undefined ? Number(it.price) : p.purchase_price;
-      if (qty <= 0) return { error: 'كمية غير صحيحة' };
+      if (qty <= 0) return { error: `كمية غير صحيحة للصنف "${p.name}"` };
+      if (!(price > 0)) return { error: `سعر الشراء للصنف "${p.name}" غير صحيح، يجب أن يكون أكبر من صفر!` };
       subtotal += qty * price;
 
       const serials = Array.isArray(it.serials) ? it.serials.map(s => String(s).trim()).filter(Boolean) : [];
-      if (p.has_serials === 1 && serials.length !== qty) {
-        return { error: `المنتج "${p.name}" مفعّل بنظام السيريال ويتطلب إدخال ${qty} سيريالات فريدة (تم إدخال ${serials.length})` };
+      if (p.has_serials === 1) {
+        if (serials.length === 0) {
+          return { error: `المنتج "${p.name}" محمي بنظام السيريالات، لا يمكن حفظ فاتورة الشراء بدون إدخال السيريالات!` };
+        }
+        if (serials.length !== qty) {
+          return { error: `المنتج "${p.name}" مفعّل بنظام السيريال ويتطلب إدخال ${qty} سيريالات فريدة مطابقة للكمية (تم إدخال ${serials.length})` };
+        }
       }
       for (const sn of serials) {
         if (inputSerialsSet.has(sn)) {
@@ -1632,14 +1638,35 @@ app.put('/api/purchases/:id/edit', auth, adminOnly, (req, res) => {
 
   /* ===== فحص كامل قبل أي كتابة ===== */
   let subtotal = 0;
+  const inputSerialsSet = new Set();
   for (const it of items) {
     const p = get('SELECT * FROM products WHERE id = ?', [it.product_id]);
     if (!p) return res.status(400).json({ error: 'منتج غير موجود في الفاتورة' });
     const qty = Number(it.qty) || 0;
     const price = Number(it.price);
     if (qty <= 0) return res.status(400).json({ error: `كمية غير صحيحة لـ "${p.name}"` });
-    if (!(price >= 0)) return res.status(400).json({ error: `سعر غير صحيح لـ "${p.name}"` });
+    if (!(price > 0)) return res.status(400).json({ error: `سعر الشراء للصنف "${p.name}" غير صحيح، يجب أن يكون أكبر من صفر!` });
     subtotal += qty * price;
+
+    const serials = Array.isArray(it.serials) ? it.serials.map(s => String(s).trim()).filter(Boolean) : [];
+    if (p.has_serials === 1) {
+      if (serials.length === 0) {
+        return res.status(400).json({ error: `المنتج "${p.name}" محمي بنظام السيريالات، لا يمكن حفظ الفاتورة بدون إدخال السيريالات!` });
+      }
+      if (serials.length !== qty) {
+        return res.status(400).json({ error: `المنتج "${p.name}" مفعّل بنظام السيريال ويتطلب إدخال ${qty} سيريالات فريدة مطابقة للكمية (تم إدخال ${serials.length})` });
+      }
+    }
+    for (const sn of serials) {
+      if (inputSerialsSet.has(sn)) {
+        return res.status(400).json({ error: `السيريال (${sn}) مكرر داخل نفس الفاتورة!` });
+      }
+      inputSerialsSet.add(sn);
+      const dupInDb = get('SELECT ps.id, p.name FROM product_serials ps JOIN products p ON p.id = ps.product_id WHERE ps.serial_number = ? AND (ps.purchase_id IS NULL OR ps.purchase_id != ?)', [sn, pu.id]);
+      if (dupInDb) {
+        return res.status(400).json({ error: `السيريال (${sn}) مكرر ومسجل بالفعل لـ "${dupInDb.name}"!` });
+      }
+    }
   }
   subtotal = r2(subtotal);
   let d = Number(b.discount);
@@ -1653,22 +1680,50 @@ app.put('/api/purchases/:id/edit', auth, adminOnly, (req, res) => {
     // 1) التراجع عن أثر الفاتورة القديمة على رصيد المورد القديم وحذف صف الدفعة الآلي
     const oldDue = r2(Number(pu.total) - Number(pu.paid));
     if (oldDue !== 0) run('UPDATE parties SET balance = balance + ? WHERE id = ?', [oldDue, pu.supplier_id]);
-    run("DELETE FROM payments WHERE party_id = ? AND pay_type = 'debt' AND note = ?", [pu.supplier_id, 'فاتورة شراء ' + pu.invoice_no]);
+    run("DELETE FROM payments WHERE party_id = ? AND pay_type = 'debt' AND (note = ? OR note = ?)",
+      [pu.supplier_id, 'فاتورة شراء ' + pu.invoice_no, 'فاتورة شراء #' + pu.invoice_no]);
+
     // 2) التراجع عن أثر المخزون القديم
     const oldItems = all('SELECT * FROM purchase_items WHERE purchase_id = ?', [pu.id]);
     for (const oi of oldItems) {
-      if (oi.product_id) run('UPDATE products SET stock = stock - ? WHERE id = ?', [oi.qty, oi.product_id]);
+      if (oi.product_id) run('UPDATE products SET stock = MAX(0, stock - ?) WHERE id = ?', [oi.qty, oi.product_id]);
     }
-    // 3) إعادة بناء الأصناف وتطبيق المخزون الجديد
+
+    // 3) التحقق من عدم حذف أي سيريال تم بيعه بالفعل
+    const oldSold = all("SELECT serial_number FROM product_serials WHERE purchase_id = ? AND status = 'sold'", [pu.id]);
+    for (const s of oldSold) {
+      if (!inputSerialsSet.has(s.serial_number)) {
+        return { error: `لا يمكن إزالة السيريال المباع (${s.serial_number}) من الفاتورة!` };
+      }
+    }
+    run("DELETE FROM product_serials WHERE purchase_id = ? AND status = 'available'", [pu.id]);
+
+    // 4) إعادة بناء الأصناف وتطبيق المخزون الجديد والسيريالات
     run('DELETE FROM purchase_items WHERE purchase_id = ?', [pu.id]);
     for (const it of items) {
       const p = get('SELECT * FROM products WHERE id = ?', [it.product_id]);
       const qty = Number(it.qty) || 0;
-      run('INSERT INTO purchase_items (purchase_id, product_id, name, barcode, qty, price, total) VALUES (?,?,?,?,?,?,?)',
-        [pu.id, p.id, p.name, p.barcode, qty, Number(it.price), r2(qty * Number(it.price))]);
-      run('UPDATE products SET stock = stock + ?, purchase_price = ? WHERE id = ?', [qty, Number(it.price), p.id]);
+      const itemPrice = Number(it.price);
+      const serials = Array.isArray(it.serials) ? it.serials.map(s => String(s).trim()).filter(Boolean) : [];
+      const serialsJson = serials.length > 0 ? JSON.stringify(serials) : null;
+
+      run('INSERT INTO purchase_items (purchase_id, product_id, name, barcode, qty, price, total, serials_json) VALUES (?,?,?,?,?,?,?,?)',
+        [pu.id, p.id, p.name, p.barcode, qty, itemPrice, r2(qty * itemPrice), serialsJson]);
+      run('UPDATE products SET stock = stock + ?, purchase_price = ? WHERE id = ?', [qty, itemPrice, p.id]);
+
+      if (serials.length > 0) {
+        run('UPDATE products SET has_serials = 1 WHERE id = ?', [p.id]);
+        for (const sn of serials) {
+          const exists = get('SELECT id FROM product_serials WHERE purchase_id = ? AND serial_number = ?', [pu.id, sn]);
+          if (!exists) {
+            run('INSERT INTO product_serials (product_id, serial_number, status, purchase_id, purchase_price) VALUES (?,?,?,?,?)',
+              [p.id, sn, 'available', pu.id, itemPrice]);
+          }
+        }
+      }
     }
-    // 4) تحديث الرأس وإعادة تطبيق أثر المورد
+
+    // 5) تحديث الرأس وإعادة تطبيق أثر المورد
     run('UPDATE purchases SET supplier_id = ?, subtotal = ?, discount = ?, total = ?, paid = ? WHERE id = ?',
       [newSupplierId, subtotal, d, total, newPaid, pu.id]);
     const newDue = r2(total - newPaid);
@@ -1678,7 +1733,57 @@ app.put('/api/purchases/:id/edit', auth, adminOnly, (req, res) => {
     return { total, paid: newPaid, due: Math.max(0, newDue), supplier_id: newSupplierId };
   });
   const result = doEdit();
+  if (result && result.error) return res.status(400).json({ error: result.error });
   res.json({ ok: true, ...result });
+});
+
+/* حذف فاتورة شراء (أدمن فقط) مع التراجع عن المخزون ورصيد المورد وحذف السيريالات */
+app.delete('/api/purchases/:id', auth, adminOnly, (req, res) => {
+  const pu = get('SELECT * FROM purchases WHERE id = ?', [req.params.id]);
+  if (!pu) return res.status(404).json({ error: 'فاتورة الشراء غير موجودة' });
+
+  // فحص أمني: التأكد من عدم بيع أي سيريال قادم من هذه الفاتورة
+  const soldSerials = all("SELECT ps.serial_number, p.name FROM product_serials ps JOIN products p ON p.id = ps.product_id WHERE ps.purchase_id = ? AND ps.status = 'sold'", [pu.id]);
+  if (soldSerials.length > 0) {
+    const listStr = soldSerials.map(s => `${s.serial_number} (${s.name})`).join('، ');
+    return res.status(400).json({
+      error: `لا يمكن حذف فاتورة الشراء لوجود سيريالات تم بيعها بالفعل في فواتير بيع: [ ${listStr} ]`
+    });
+  }
+
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const doDelete = transaction(() => {
+    // 1) التراجع عن أثر الفاتورة على رصيد المورد
+    const oldDue = r2(Number(pu.total) - Number(pu.paid));
+    if (oldDue !== 0) {
+      run('UPDATE parties SET balance = balance + ? WHERE id = ?', [oldDue, pu.supplier_id]);
+    }
+    // 2) حذف سندات الصرف التلقائية المرتبطة بالفاتورة
+    run("DELETE FROM payments WHERE party_id = ? AND pay_type = 'debt' AND (note = ? OR note = ?)",
+      [pu.supplier_id, 'فاتورة شراء ' + pu.invoice_no, 'فاتورة شراء #' + pu.invoice_no]);
+
+    // 3) التراجع عن المخزون لجميع الأصناف
+    const oldItems = all('SELECT * FROM purchase_items WHERE purchase_id = ?', [pu.id]);
+    for (const oi of oldItems) {
+      if (oi.product_id) {
+        run('UPDATE products SET stock = MAX(0, stock - ?) WHERE id = ?', [oi.qty, oi.product_id]);
+      }
+    }
+
+    // 4) حذف السيريالات المتبقية المرتبطة بالفاتورة
+    run('DELETE FROM product_serials WHERE purchase_id = ?', [pu.id]);
+
+    // 5) حذف سطور الفاتورة والفاتورة نفسها
+    run('DELETE FROM purchase_items WHERE purchase_id = ?', [pu.id]);
+    run('DELETE FROM purchases WHERE id = ?', [pu.id]);
+
+    return { ok: true, invoice_no: pu.invoice_no };
+  });
+
+  const result = doDelete();
+  if (result && result.error) return res.status(400).json({ error: result.error });
+  console.log(`>> [Purchases] تم حذف فاتورة الشراء (${pu.invoice_no}) بنجاح بواسطة المدير (${req.user.username}).`);
+  res.json({ ok: true, message: `تم حذف فاتورة الشراء ${pu.invoice_no} والتراجع عن المخزون ورصيد المورد بنجاح` });
 });
 
 /* ==================== RETURNS ==================== */
