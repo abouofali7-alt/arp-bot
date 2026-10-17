@@ -23,7 +23,6 @@ const PAGE_PERMS = [
   { id: 'expenses', label: '💸 المصروفات' },
   { id: 'coupons', label: '🎟️ الكوبونات' },
   { id: 'stocktake', label: '📋 الجرد' },
-  { id: 'whatsapp_bot', label: '🤖 بوت واتساب و n8n' },
 ];
 const ACTION_PERMS = [
   { key: 'products.edit', label: 'إضافة وتعديل المنتجات والأسعار والمخزون والأقسام' },
@@ -69,7 +68,6 @@ const NAV = [
   { id: 'expenses', title: 'المصروفات', icon: '💸', view: 'expenses', admin: true },
   { id: 'coupons', title: 'الكوبونات', icon: '🎟️', view: 'coupons', admin: true },
   { id: 'stocktake', title: 'الجرد', icon: '📋', view: 'stocktake', admin: true },
-  { id: 'whatsapp_bot', title: 'بوت واتساب و n8n', icon: '🤖', view: 'whatsapp_bot', admin: true },
   { id: 'users', title: 'المستخدمون والفروع', icon: '👥', view: 'users', admin: true },
   { id: 'permissions', title: 'الصلاحيات', icon: '🔐', view: 'permissions', admin: true },
   { id: 'settings', title: 'الإعدادات', icon: '⚙️', view: 'settings', admin: true },
@@ -139,7 +137,6 @@ function route() {
     expenses: renderExpenses,
     coupons: renderCoupons,
     stocktake: renderStocktakes,
-    whatsapp_bot: renderWhatsAppBot,
     users: renderUsers,
     permissions: renderPermissions,
     settings: renderSettings,

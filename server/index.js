@@ -33,7 +33,7 @@ app.use(express.json({ limit: '5mb' }));
 license.attachDb(get, run);
 const GATE_OPEN = new Set(['/activate.html', '/api/license/status', '/api/license/trial', '/api/license/activate', '/api/health', '/favicon.ico']);
 app.use((req, res, next) => {
-  if (GATE_OPEN.has(req.path) || req.path.startsWith('/api/bot/')) return next();
+  if (GATE_OPEN.has(req.path)) return next();
   if (license.isOpen()) return next();
   if (req.path.startsWith('/api')) {
     const s = license.status();
@@ -2658,14 +2658,10 @@ app.post('/api/backup/factory-reset', auth, adminOnly, (req, res) => {
           ['admin', hash, 'مدير النظام', 'admin', branchId]);
       }
 
-      // 6. Delete all settings EXCEPT bot settings and license
+      // 6. Delete all settings EXCEPT license and store name
       run(`
         DELETE FROM settings 
-        WHERE key NOT LIKE 'bot_%' 
-          AND key NOT LIKE 'ultramsg_%' 
-          AND key NOT LIKE 'gemini_%' 
-          AND key NOT LIKE 'store_owner_%' 
-          AND key NOT IN ('license_json', 'store_name', 'n8n_webhook_url')
+        WHERE key NOT IN ('license_json', 'store_name')
       `);
 
       // 7. Reset auto-increment sequences for wiped tables so IDs start fresh from 1
@@ -3329,10 +3325,6 @@ app.delete('/api/used-devices/:id', auth, (req, res) => {
   res.json({ ok: true, message: 'تم حذف سجل الجهاز بنجاح' });
 });
 
-/* ==================== WHATSAPP BOT & N8N ROUTES ==================== */
-const { registerBotRoutes, startUltraMsgLiveSync } = require('./whatsapp_bot');
-registerBotRoutes(app);
-
 const HOST = process.env.ARP_HOST || '0.0.0.0';
 
 function listenWithFallback(port, host) {
@@ -3351,7 +3343,6 @@ function listenWithFallback(port, host) {
 const ready = (async () => {
   await init();
   seedAdmin();
-  try { startUltraMsgLiveSync(); } catch (e) { console.error('UltraMsg sync error:', e); }
   const { port, host } = await listenWithFallback(Number(PORT), HOST);
   try {
     const b = dailyBackup();

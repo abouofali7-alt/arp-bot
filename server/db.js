@@ -476,45 +476,9 @@ function initSchema() {
       FOREIGN KEY (sale_id) REFERENCES sales(id)
     );
 
-    CREATE TABLE IF NOT EXISTS whatsapp_customers (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      phone TEXT UNIQUE NOT NULL,
-      name TEXT DEFAULT '',
-      interests TEXT DEFAULT '',
-      primary_interest TEXT DEFAULT '',
-      last_inquiry_text TEXT DEFAULT '',
-      last_offer_sent_at TEXT,
-      inquiries_count INTEGER NOT NULL DEFAULT 1,
-      last_inquiry_at TEXT DEFAULT (datetime('now','localtime')),
-      notes TEXT DEFAULT '',
-      created_at TEXT DEFAULT (datetime('now','localtime'))
-    );
-
-    CREATE TABLE IF NOT EXISTS whatsapp_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      phone TEXT NOT NULL,
-      direction TEXT NOT NULL DEFAULT 'inbound',
-      message TEXT NOT NULL,
-      matched_products TEXT DEFAULT '',
-      created_at TEXT DEFAULT (datetime('now','localtime'))
-    );
-
-    CREATE TABLE IF NOT EXISTS whatsapp_campaigns (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      message TEXT NOT NULL,
-      target_interest TEXT DEFAULT 'all',
-      recipient_count INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL DEFAULT 'draft',
-      sent_at TEXT,
-      created_at TEXT DEFAULT (datetime('now','localtime'))
-    );
-
     CREATE UNIQUE INDEX IF NOT EXISTS idx_product_serials_unique ON product_serials(product_id, serial_number);
     CREATE INDEX IF NOT EXISTS idx_product_serials_serial ON product_serials(serial_number);
     CREATE INDEX IF NOT EXISTS idx_product_serials_status ON product_serials(status);
-    CREATE INDEX IF NOT EXISTS idx_wa_customers_phone ON whatsapp_customers(phone);
-    CREATE INDEX IF NOT EXISTS idx_wa_logs_phone ON whatsapp_logs(phone);
   `);
   migrate();
 }
@@ -581,9 +545,6 @@ function migrate() {
   safeAddColumn('purchase_items', 'serials_json', 'TEXT');
   safeAddColumn('sale_items', 'serials_json', 'TEXT');
   safeAddColumn('purchases', 'user_id', 'INTEGER');
-  safeAddColumn('whatsapp_customers', 'primary_interest', "TEXT DEFAULT ''");
-  safeAddColumn('whatsapp_customers', 'last_offer_sent_at', 'TEXT');
-  safeAddColumn('whatsapp_customers', 'last_inquiry_text', "TEXT DEFAULT ''");
 
   const catSql = get("SELECT sql FROM sqlite_master WHERE type='table' AND name='categories'")?.sql || '';
   if (catSql.includes('UNIQUE')) {
@@ -618,26 +579,25 @@ function migrate() {
     CREATE INDEX IF NOT EXISTS idx_used_devices_status ON used_devices(status);
   `);
 
-  const botDefaults = {
+  const defaultSettings = {
     loyalty_percent: '10',
     loyalty_threshold: '5',
-    loyalty_days: '2',
-    bot_api_key: 'arp_bot_' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10),
-    n8n_webhook_url: '',
-    bot_greeting_msg: 'أهلاً بك في متجرنا! يسعدنا مساعدتك في معرفة أسعار وتوافر كافة الأجهزة والمنتجات.',
-    bot_auto_quote_enabled: '1',
-    gemini_api_key: '',
-    gemini_enabled: '1',
-    gemini_model: 'gemini-3.8-flash',
-    store_owner_name: 'المعلم علي',
-    store_owner_phone: '01050592877',
-    store_owner_schedule: 'متواجد يومياً بالمحل من 5:00 مساءً حتى 11:00 مساءً عدا الجمعة',
-    store_owner_custom_reply: 'المعلم متواجد في المحل حسب المواعيد الموضحة، ولأي أمر عاجل يمكنك التواصل معه مباشرة عبر هاتفه الخاص.'
+    loyalty_days: '2'
   };
-  for (const [k, v] of Object.entries(botDefaults)) {
+  for (const [k, v] of Object.entries(defaultSettings)) {
     const s = get('SELECT value FROM settings WHERE key = ?', [k]);
     if (!s) run('INSERT INTO settings (key, value) VALUES (?,?)', [k, v]);
   }
+
+  // تنظيف أي جداول أو إعدادات سابقة خاصة بنظام البوت والواتساب
+  try {
+    db.exec(`
+      DROP TABLE IF EXISTS whatsapp_customers;
+      DROP TABLE IF EXISTS whatsapp_logs;
+      DROP TABLE IF EXISTS whatsapp_campaigns;
+      DELETE FROM settings WHERE key LIKE 'bot_%' OR key LIKE 'ultramsg_%' OR key LIKE 'gemini_%' OR key LIKE 'store_owner_%' OR key = 'n8n_webhook_url';
+    `);
+  } catch (e) {}
 }
 
 function get(sql, params = []) {

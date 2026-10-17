@@ -20,7 +20,6 @@
       "electron/**/*",
       "server/**/*",
       "public/**/*",
-      "n8n_whatsapp_workflow.json",
       "package.json"
     ],
     "asar": true,
